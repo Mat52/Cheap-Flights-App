@@ -1,0 +1,51 @@
+services:
+  sylwester:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: loty_gui
+    container_name: loty_sylwester
+    environment:
+      - CONFIG_MODULE=config_sets.config_sylwester
+    volumes:
+      - ./app:/app/app
+    working_dir: /app
+    command: bash /app/entrypoint.sh
+  malta:
+    image: loty_gui
+    container_name: loty_malta
+    environment:
+      - CONFIG_MODULE=config_sets.config_malta
+    volumes:
+      - ./app:/app/app
+    working_dir: /app
+    command: bash /app/entrypoint.sh
+  listopad:
+    image: loty_gui
+    container_name: loty_listopad
+    environment:
+      - CONFIG_MODULE=config_sets.config_listopad
+    volumes:
+      - ./app:/app/app
+    working_dir: /app
+    command: bash /app/entrypoint.sh
+  sierpien:
+    image: loty_gui
+    container_name: loty_sierpien
+    environment:
+      - CONFIG_MODULE=config_sets.config_sierpien
+    volumes:
+      - ./app:/app/app
+    working_dir: /app
+    command: bash /app/entrypoint.sh
+  wrzesien:
+    image: loty_gui
+    container_name: loty_wrzesien
+    environment:
+      - CONFIG_MODULE=config_sets.config_wrzesien
+    volumes:
+      - ./app:/app/app
+    working_dir: /app
+    command: bash /app/entrypoint.sh
+
+  

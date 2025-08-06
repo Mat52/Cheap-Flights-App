@@ -1,0 +1,23 @@
+services:
+  wrzesien550:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: loty_gui
+    container_name: loty_wrzesien_550
+    environment:
+      - CONFIG_MODULE=config_sets.config_wrzesien_450
+    volumes:
+      - ./app:/app/app
+    working_dir: /app
+    command: bash /app/entrypoint.sh
+  wrzesien750:
+    image: loty_gui
+    container_name: loty_wrzesien_750
+    environment:
+      - CONFIG_MODULE=config_sets.config_wrzesien_750
+    volumes:
+      - ./app:/app/app
+    working_dir: /app
+    command: bash /app/entrypoint.sh
+ 

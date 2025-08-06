@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pytest_cache/
+.pytest_cache/
+
+# Venv
+venv/
+
+# Playwright / Browser cache
+.playwright/
+ms-playwright/
+
+# Docker volumes (jeśli jakieś tworzysz)
+docker-volume-data/
+
+# System files
+.DS_Store
+Thumbs.db
