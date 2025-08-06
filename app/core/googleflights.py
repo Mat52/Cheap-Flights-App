@@ -10,10 +10,8 @@ def search_flight_google(page, origin, destination, date_out, cookies):
 
             if(cookies == True):
                 try:
-                    page.screenshot(path="debug.png", full_page=True)
                     page.wait_for_selector("button:has-text('Zaakceptuj wszystko')", timeout=1000) #tutaj timeout
                     page.click("button:has-text('Zaakceptuj wszystko')", timeout=1000) #tutaj timeout
-                    page.screenshot(path="debug.png", full_page=True)
                     print("✅ Zaakceptowano cookies")
                 except:
                     print("ℹ️ Brak popupu cookies")
