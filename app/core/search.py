@@ -86,10 +86,15 @@ async def split_cached(legs, cache_max_age_minutes):
     return cached_results, to_scrape
 
 
-async def scrape_legs(context, legs, concurrency):
+async def scrape_legs(context, legs, concurrency, on_progress=None):
     """Scrape every (origin, destination, date) leg concurrently, at most
     `concurrency` Playwright pages open at once, all sharing `context` (one
-    browser, many pages — cheaper than one context per leg)."""
+    browser, many pages — cheaper than one context per leg).
+
+    `on_progress()`, if given, is called once per leg *attempted* (whether
+    or not it found a flight) — a plain, fast, non-blocking callback (e.g.
+    incrementing an in-memory counter), not a place for I/O.
+    """
     semaphore = asyncio.Semaphore(max(1, concurrency))
 
     async def scrape_one(origin, destination, date):
@@ -99,11 +104,13 @@ async def scrape_legs(context, legs, concurrency):
                 return await search_flight_google(page, origin, destination, date)
             finally:
                 await page.close()
+                if on_progress:
+                    on_progress()
 
     return await asyncio.gather(*(scrape_one(origin, destination, date) for origin, destination, date in legs))
 
 
-async def run_search(launch_browser, params, on_result=None, concurrency=5, cache_max_age_minutes=30):
+async def run_search(launch_browser, params, on_result=None, concurrency=5, cache_max_age_minutes=30, on_progress=None):
     """Scan every origin x destination x date combo in both directions.
 
     `launch_browser` is an async, zero-arg callable returning a freshly
@@ -113,6 +120,10 @@ async def run_search(launch_browser, params, on_result=None, concurrency=5, cach
     `on_result(flight_dict)`, if given, is called for each *freshly scraped*
     leg as soon as it's found (e.g. to persist it) — cache hits are already
     in the database, so they're not re-persisted.
+    `on_progress()`, if given, is called once per leg accounted for — cache
+    hits count immediately (they're instant), scraped legs count as each
+    finishes — so `len(build_legs(params))` calls to it means the search is
+    fully done; this is what drives a live progress bar.
 
     Returns (all_legs_found, round_trip_offers_sorted_by_price).
     """
@@ -122,6 +133,9 @@ async def run_search(launch_browser, params, on_result=None, concurrency=5, cach
 
     if cached_results:
         print(f"💾 {len(cached_results)}/{len(legs)} odcinków wziętych z cache (bez scrapowania)")
+        if on_progress:
+            for _ in cached_results:
+                on_progress()
 
     if to_scrape:
         browser = await launch_browser()
@@ -130,7 +144,7 @@ async def run_search(launch_browser, params, on_result=None, concurrency=5, cach
             # Bounds every Playwright wait that doesn't specify its own
             # timeout, for every page created from this context.
             context.set_default_timeout(8000)
-            scraped = await scrape_legs(context, to_scrape, concurrency)
+            scraped = await scrape_legs(context, to_scrape, concurrency, on_progress=on_progress)
             for flight in scraped:
                 if flight:
                     results.append(flight)

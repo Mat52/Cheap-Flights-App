@@ -1,14 +1,17 @@
 import asyncio
 import os
+import threading
+import time
+import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, url_for
 from playwright.async_api import async_playwright
 
 import database
 from core.airports import load_airports
-from core.search import run_search, znajdz_polaczenia_dwustronne
+from core.search import build_legs, run_search, znajdz_polaczenia_dwustronne
 from core.telegram import wyslij_telegram
 from core.travel_intent import resolve_destinations
 from core.utils import generate_dates
@@ -30,6 +33,23 @@ try:
     database.init_db()
 except Exception as e:
     print(f"⚠️ Baza danych niedostępna przy starcie: {e}")
+
+# In-memory registry of live/finished searches, so the page can show a real
+# progress bar instead of hanging unresponsively for the whole scrape: a
+# search runs in a background thread (see run_search_job) while the browser
+# polls /search-status/<id>. Personal-use scale — an in-memory dict is fine,
+# no need for a real job queue. JOBS_LOCK guards every read/write since the
+# background thread and request-handling threads touch it concurrently.
+JOBS = {}
+JOBS_LOCK = threading.Lock()
+JOB_TTL_SECONDS = 3600  # stale jobs are pruned on the next search, not live
+
+
+def _prune_old_jobs():
+    cutoff = time.time() - JOB_TTL_SECONDS
+    with JOBS_LOCK:
+        for sid in [sid for sid, job in JOBS.items() if job["created_at"] < cutoff]:
+            del JOBS[sid]
 
 
 def parse_codes(raw: str):
@@ -94,14 +114,110 @@ def format_offer_message(offers):
     return msg
 
 
+def run_search_job(search_id, form):
+    """Runs entirely in a background thread, started by index()'s POST
+    handler right after the cheap validation passes — this is everything
+    that used to block the request: the AI destination-query call, then the
+    scrape itself. Progress is reported into JOBS[search_id] as it happens
+    so /search-status/<id> has something live to report to the page.
+    """
+    def fail(message):
+        with JOBS_LOCK:
+            JOBS[search_id].update(status="done", error=message)
+
+    try:
+        departure_month = datetime.strptime(form["departure_start"], "%Y-%m-%d").month
+        try:
+            destinations, intent = resolve_destinations(form["travel_query"], load_airports(), departure_month)
+        except RuntimeError as e:
+            # Ollama itself failed (not running, model missing, ...)
+            return fail(str(e))
+
+        intent_summary = describe_intent(intent, form["travel_query"])
+        with JOBS_LOCK:
+            JOBS[search_id]["intent_summary"] = intent_summary
+
+        if not destinations:
+            return fail(
+                f"Brak lotnisk pasujących do zapytania „{form['travel_query']}”. "
+                "Spróbuj innego kraju/regionu albo zostaw pole puste, żeby przeszukać wszystko."
+            )
+
+        params = {
+            "origins": parse_codes(form["origins"]),
+            "destinations": destinations,
+            "dates_departure": generate_dates(form["departure_start"], form["departure_end"]),
+            "dates_back": generate_dates(form["return_start"], form["return_end"]),
+            "grupy_baz": parse_groups(form["grupy_baz"]),
+            "grupy_destynacji": parse_groups(form["grupy_destynacji"]),
+            "min_days": int(form["min_days"]),
+            "max_days": int(form["max_days"]),
+        }
+        price_threshold = float(form["price_threshold"])
+        total_legs = len(build_legs(params))
+
+        with JOBS_LOCK:
+            JOBS[search_id].update(status="scraping", total=total_legs)
+
+        def persist(flight):
+            try:
+                database.save_flight_result(flight)
+            except Exception as e:
+                print(f"⚠️ Nie udało się zapisać lotu do bazy: {e}")
+
+        def bump_progress():
+            with JOBS_LOCK:
+                JOBS[search_id]["done"] += 1
+
+        cache_minutes = CACHE_MAX_AGE_MINUTES if form["use_cache"] else 0
+
+        async def do_search():
+            # A fresh Playwright driver per search, not a shared/cached one:
+            # the async API's dispatcher is bound to the event loop that
+            # started it. launch_browser is only actually invoked by
+            # run_search if some leg isn't already covered by the cache.
+            async with async_playwright() as p:
+                async def launch_browser():
+                    return await p.chromium.launch(headless=True)
+
+                return await run_search(
+                    launch_browser,
+                    params,
+                    on_result=persist,
+                    on_progress=bump_progress,
+                    concurrency=SCRAPE_CONCURRENCY,
+                    cache_max_age_minutes=cache_minutes,
+                )
+
+        results, offers = asyncio.run(do_search())
+
+        good_offers = [o for o in offers if o["cena"] < price_threshold]
+        telegram_sent = False
+        error = None
+        if good_offers and form["notify_telegram"]:
+            if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+                wyslij_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, format_offer_message(good_offers))
+                telegram_sent = True
+            else:
+                error = (
+                    "Znaleziono okazje, ale TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID nie są "
+                    "skonfigurowane (patrz .env.example) — powiadomienie nie zostało wysłane."
+                )
+
+        with JOBS_LOCK:
+            JOBS[search_id].update(
+                status="done", results=results, offers=offers, telegram_sent=telegram_sent, error=error,
+            )
+
+    except ValueError as e:
+        fail(str(e))
+    except Exception as e:
+        fail(f"Błąd wyszukiwania: {e}")
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     form = dict(DEFAULTS)
-    results = None
-    offers = None
-    error = None
-    telegram_sent = False
-    intent_summary = None
 
     if request.method == "GET":
         # lets a link (e.g. "no saved results — search live instead" on
@@ -109,121 +225,98 @@ def index():
         for key in ("origins", "travel_query", "grupy_baz", "grupy_destynacji"):
             if request.args.get(key):
                 form[key] = request.args[key]
+        return render_template(
+            "index.html", form=form, results=None, offers=None, price_threshold=None,
+            error=None, telegram_sent=False,
+            telegram_configured=bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID), intent_summary=None,
+        )
 
-    if request.method == "POST":
-        form.update({
-            "origins": request.form.get("origins", ""),
-            "travel_query": request.form.get("travel_query", ""),
-            "grupy_baz": request.form.get("grupy_baz", ""),
-            "grupy_destynacji": request.form.get("grupy_destynacji", ""),
-            "departure_start": request.form.get("departure_start", ""),
-            "departure_end": request.form.get("departure_end", ""),
-            "return_start": request.form.get("return_start", ""),
-            "return_end": request.form.get("return_end", ""),
-            "min_days": request.form.get("min_days", DEFAULTS["min_days"]),
-            "max_days": request.form.get("max_days", DEFAULTS["max_days"]),
-            "price_threshold": request.form.get("price_threshold", DEFAULTS["price_threshold"]),
-            "notify_telegram": request.form.get("notify_telegram") == "on",
-            "use_cache": request.form.get("use_cache") == "on",
-        })
+    form.update({
+        "origins": request.form.get("origins", ""),
+        "travel_query": request.form.get("travel_query", ""),
+        "grupy_baz": request.form.get("grupy_baz", ""),
+        "grupy_destynacji": request.form.get("grupy_destynacji", ""),
+        "departure_start": request.form.get("departure_start", ""),
+        "departure_end": request.form.get("departure_end", ""),
+        "return_start": request.form.get("return_start", ""),
+        "return_end": request.form.get("return_end", ""),
+        "min_days": request.form.get("min_days", DEFAULTS["min_days"]),
+        "max_days": request.form.get("max_days", DEFAULTS["max_days"]),
+        "price_threshold": request.form.get("price_threshold", DEFAULTS["price_threshold"]),
+        "notify_telegram": request.form.get("notify_telegram") == "on",
+        "use_cache": request.form.get("use_cache") == "on",
+    })
 
-        try:
-            origins = parse_codes(form["origins"])
-            if not origins:
-                raise ValueError("Podaj przynajmniej jedno lotnisko wylotu.")
-            if not form["departure_start"] or not form["departure_end"]:
-                raise ValueError("Podaj zakres dat wylotu.")
-            if not form["return_start"] or not form["return_end"]:
-                raise ValueError("Podaj zakres dat powrotu.")
+    # Cheap, synchronous checks only — instant feedback on the same page,
+    # same as before. Everything slow (the AI query, the scrape itself)
+    # moves into a background thread so the page never just sits frozen.
+    error = None
+    if not parse_codes(form["origins"]):
+        error = "Podaj przynajmniej jedno lotnisko wylotu."
+    elif not form["departure_start"] or not form["departure_end"]:
+        error = "Podaj zakres dat wylotu."
+    elif not form["return_start"] or not form["return_end"]:
+        error = "Podaj zakres dat powrotu."
+    if error:
+        return render_template(
+            "index.html", form=form, results=None, offers=None, price_threshold=None,
+            error=error, telegram_sent=False,
+            telegram_configured=bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID), intent_summary=None,
+        )
 
-            departure_month = datetime.strptime(form["departure_start"], "%Y-%m-%d").month
-            try:
-                destinations, intent = resolve_destinations(form["travel_query"], load_airports(), departure_month)
-            except RuntimeError as e:
-                # Claude call itself failed (bad/missing key, rate limit, ...)
-                raise ValueError(str(e))
-            intent_summary = describe_intent(intent, form["travel_query"])
-            if not destinations:
-                raise ValueError(
-                    f"Brak lotnisk pasujących do zapytania „{form['travel_query']}”. "
-                    "Spróbuj innego kraju/regionu albo zostaw pole puste, żeby przeszukać wszystko."
-                )
+    _prune_old_jobs()
+    search_id = uuid.uuid4().hex
+    with JOBS_LOCK:
+        JOBS[search_id] = {
+            "status": "resolving", "done": 0, "total": 0, "error": None,
+            "results": None, "offers": None, "intent_summary": None, "telegram_sent": False,
+            "form": dict(form), "created_at": time.time(),
+        }
+    threading.Thread(target=run_search_job, args=(search_id, form), daemon=True).start()
+    return redirect(url_for("search_page", search_id=search_id))
 
-            params = {
-                "origins": origins,
-                "destinations": destinations,
-                "dates_departure": generate_dates(form["departure_start"], form["departure_end"]),
-                "dates_back": generate_dates(form["return_start"], form["return_end"]),
-                "grupy_baz": parse_groups(form["grupy_baz"]),
-                "grupy_destynacji": parse_groups(form["grupy_destynacji"]),
-                "min_days": int(form["min_days"]),
-                "max_days": int(form["max_days"]),
-            }
-            price_threshold = float(form["price_threshold"])
 
-            def persist(flight):
-                try:
-                    database.save_flight_result(flight)
-                except Exception as e:
-                    print(f"⚠️ Nie udało się zapisać lotu do bazy: {e}")
+@app.route("/search/<search_id>", methods=["GET"])
+def search_page(search_id):
+    """Shown right after submitting a search: a live progress bar while
+    run_search_job works in the background, or — once it's done — the same
+    results markup index() used to render directly, now pulled from JOBS."""
+    with JOBS_LOCK:
+        job = JOBS.get(search_id)
+    if not job:
+        return redirect(url_for("index"))  # unknown or pruned — start over
 
-            cache_minutes = CACHE_MAX_AGE_MINUTES if form["use_cache"] else 0
+    if job["status"] != "done":
+        return render_template("searching.html", search_id=search_id)
 
-            async def do_search():
-                # A fresh Playwright driver per request, not a shared/cached
-                # one: the async API's dispatcher is bound to the event loop
-                # that started it, which doesn't survive being reused from a
-                # later, separate asyncio.run() call. launch_browser is only
-                # actually invoked by run_search if some leg isn't already
-                # covered by the cache.
-                async with async_playwright() as p:
-                    async def launch_browser():
-                        return await p.chromium.launch(headless=True)
-
-                    return await run_search(
-                        launch_browser,
-                        params,
-                        on_result=persist,
-                        concurrency=SCRAPE_CONCURRENCY,
-                        cache_max_age_minutes=cache_minutes,
-                    )
-
-            results, offers = asyncio.run(do_search())
-
-            good_offers = [o for o in offers if o["cena"] < price_threshold]
-            if good_offers and form["notify_telegram"]:
-                if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-                    wyslij_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, format_offer_message(good_offers))
-                    telegram_sent = True
-                else:
-                    error = (
-                        "Znaleziono okazje, ale TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID nie są "
-                        "skonfigurowane (patrz .env.example) — powiadomienie nie zostało wysłane."
-                    )
-
-        except ValueError as e:
-            error = str(e)
-        except Exception as e:
-            error = f"Błąd wyszukiwania: {e}"
-
-    good_price_threshold = None
-    if request.method == "POST" and not error:
-        try:
-            good_price_threshold = float(form["price_threshold"])
-        except ValueError:
-            good_price_threshold = None
+    try:
+        good_price_threshold = float(job["form"]["price_threshold"])
+    except (ValueError, KeyError):
+        good_price_threshold = None
 
     return render_template(
         "index.html",
-        form=form,
-        results=results,
-        offers=offers,
+        form=job["form"],
+        results=job["results"],
+        offers=job["offers"],
         price_threshold=good_price_threshold,
-        error=error,
-        telegram_sent=telegram_sent,
+        error=job["error"],
+        telegram_sent=job["telegram_sent"],
         telegram_configured=bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
-        intent_summary=intent_summary,
+        intent_summary=job["intent_summary"],
     )
+
+
+@app.route("/search-status/<search_id>", methods=["GET"])
+def search_status(search_id):
+    """Polled by searching.html's JS every ~1s. Kept intentionally tiny —
+    just the numbers the progress bar needs — so it stays fast even while
+    the background thread is mid-scrape."""
+    with JOBS_LOCK:
+        job = JOBS.get(search_id)
+    if not job:
+        return jsonify({"status": "gone"}), 404
+    return jsonify({"status": job["status"], "done": job["done"], "total": job["total"]})
 
 
 SAVED_DEFAULTS = {
@@ -283,8 +376,10 @@ def saved():
 
 
 if __name__ == "__main__":
-    # threaded=False: one browser session (and its own asyncio.run() event
-    # loop) per process at a time — requests are still handled one at a
-    # time; the concurrency added in core.search happens *within* a single
-    # request's search, across its many legs, not across separate requests.
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False, threaded=False)
+    # threaded=True: the search itself now runs in a background thread
+    # (run_search_job), started by index()'s POST handler and polled by
+    # /search-status — the dev server needs to serve those polls
+    # concurrently with whatever search is running in the background.
+    # Personal-use scale: no cap on concurrent searches, each gets its own
+    # browser — fine for one or a few people, not meant for real traffic.
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False, threaded=True)

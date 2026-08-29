@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <title>Szukam… — Cheap Flights</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>✈️ Cheap Flights</h1>
+  <div class="nav">
+    <a href="/" class="active">🌐 Szukaj na żywo</a>
+    <a href="/saved">💾 Przeglądaj zapisane oferty</a>
+  </div>
+
+  <div class="searching-box">
+    <p id="status-text">🤖 Interpretuję zapytanie…</p>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    <p class="muted" id="progress-text"></p>
+    <p class="hint">Ta strona odświeża się sama — nie musisz nic klikać.</p>
+  </div>
+
+  <script>
+    var searchId = {{ search_id | tojson }};
+    var statusText = document.getElementById('status-text');
+    var fill = document.getElementById('progress-fill');
+    var progressText = document.getElementById('progress-text');
+
+    function poll() {
+      fetch('/search-status/' + searchId)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.status === 'gone') {
+            window.location.href = '/';
+            return;
+          }
+          if (data.status === 'resolving') {
+            statusText.textContent = '🤖 Interpretuję zapytanie…';
+            fill.style.width = '8%';
+            fill.classList.add('indeterminate');
+            progressText.textContent = '';
+          } else if (data.status === 'scraping') {
+            statusText.textContent = '🔍 Szukam lotów na Google Flights…';
+            fill.classList.remove('indeterminate');
+            var pct = data.total ? Math.round(100 * data.done / data.total) : 0;
+            fill.style.width = Math.max(pct, 4) + '%';
+            progressText.textContent = data.done + ' / ' + data.total + ' odcinków sprawdzonych';
+          }
+          if (data.status === 'done') {
+            window.location.href = '/search/' + searchId;
+          } else {
+            setTimeout(poll, 800);
+          }
+        })
+        .catch(function () { setTimeout(poll, 1500); });
+    }
+    poll();
+  </script>
+</body>
+</html>

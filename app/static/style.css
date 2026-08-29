@@ -28,6 +28,14 @@ th { background: #f7f7f7; }
 tr.good { background: #eaf7ea; }
 .muted { color: #777; font-size: 0.85rem; }
 
+/* --- search progress --- */
+.searching-box { text-align: center; padding: 3rem 1rem; }
+.searching-box p { font-size: 1.05rem; margin-bottom: 1rem; }
+.progress-bar { background: #eee; border-radius: 8px; height: 14px; max-width: 420px; margin: 0 auto; overflow: hidden; }
+.progress-fill { background: #1a73e8; height: 100%; width: 0; transition: width 0.4s ease; }
+.progress-fill.indeterminate { animation: progress-pulse 1.2s ease-in-out infinite; }
+@keyframes progress-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+
 /* --- nav --- */
 .nav { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
 .nav a { color: #1a73e8; text-decoration: none; }
