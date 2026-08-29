@@ -71,6 +71,7 @@ def parse_groups(raw: str):
 DEFAULTS = {
     "origins": "KRK, KTW",
     "travel_query": "",
+    "anywhere_destinations": False,
     "date_query": "",
     "grupy_baz": "KRK, KTW",
     "grupy_destynacji": "",
@@ -162,16 +163,31 @@ def run_search_job(search_id, form):
         if not dates_departure or not dates_back:
             return fail("Brak dat pasujących do zapytania — spróbuj innego miesiąca albo podaj dokładne daty.")
 
-        departure_month = datetime.strptime(dates_departure[0], "%Y-%m-%d").month
-        try:
-            destinations, intent = resolve_destinations(form["travel_query"], load_airports(), departure_month)
-        except RuntimeError as e:
-            # Ollama itself failed (not running, model missing, ...)
-            return fail(str(e))
+        if form["anywhere_destinations"]:
+            # Deterministic, no Ollama call at all — bypasses the AI query
+            # entirely rather than relying on it to correctly recognize
+            # "no preference" as a concept. That reliance was the actual
+            # bug this checkbox exists to route around: typing the word
+            # "gdziekolwiek" ("anywhere") into the free-text field still
+            # sends it to the model like any other query, and it can be
+            # (and was, in testing) misread as a specific, unsupported
+            # place instead of "no preference" — this checkbox can't
+            # misfire that way because it never asks the model anything.
+            destinations = [a["code"] for a in load_airports()]
+            intent_summary = "🌍 Dokądkolwiek — przeszukano wszystkie lotniska z listy (bez pytania AI)."
+            with JOBS_LOCK:
+                JOBS[search_id]["intent_summary"] = intent_summary
+        else:
+            departure_month = datetime.strptime(dates_departure[0], "%Y-%m-%d").month
+            try:
+                destinations, intent = resolve_destinations(form["travel_query"], load_airports(), departure_month)
+            except RuntimeError as e:
+                # Ollama itself failed (not running, model missing, ...)
+                return fail(str(e))
 
-        intent_summary = describe_intent(intent, form["travel_query"])
-        with JOBS_LOCK:
-            JOBS[search_id]["intent_summary"] = intent_summary
+            intent_summary = describe_intent(intent, form["travel_query"])
+            with JOBS_LOCK:
+                JOBS[search_id]["intent_summary"] = intent_summary
 
         if not destinations:
             return fail(
@@ -270,6 +286,7 @@ def index():
     form.update({
         "origins": request.form.get("origins", ""),
         "travel_query": request.form.get("travel_query", ""),
+        "anywhere_destinations": request.form.get("anywhere_destinations") == "on",
         "date_query": request.form.get("date_query", ""),
         "grupy_baz": request.form.get("grupy_baz", ""),
         "grupy_destynacji": request.form.get("grupy_destynacji", ""),

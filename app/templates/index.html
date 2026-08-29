@@ -35,10 +35,11 @@
 
     <fieldset>
       <legend>Dokąd chcesz polecieć?</legend>
-      <label for="travel_query">Opisz swoimi słowami, gdzie chcesz polecieć — zapytanie interpretuje AI</label>
+      <label class="pick" style="margin-top:0.75rem;"><input type="checkbox" id="anywhere-destinations" name="anywhere_destinations" {% if form.anywhere_destinations %}checked{% endif %} style="width:auto;">🌍 Dokądkolwiek — przeszukaj wszystkie lotniska z listy (bez pytania AI, zawsze działa)</label>
+      <label for="travel_query">Albo opisz swoimi słowami, gdzie chcesz polecieć — zapytanie interpretuje AI</label>
       <textarea id="travel_query" name="travel_query" placeholder='np. "Hiszpania", "gdziekolwiek gdzie jest cieplej niż 20°C", "Włochy albo Grecja"'>{{ form.travel_query }}</textarea>
-      <div class="hint">Zostaw puste, żeby przeszukać wszystkie lotniska z listy. AI dopasowuje kraje z listy lotnisk powyżej, a preferencje pogodowe — do historycznych danych klimatycznych dla wybranego miesiąca wylotu.</div>
-      <div class="warn">⚠️ Szerokie zapytanie (albo puste pole = wszędzie) w połączeniu z wieloma datami wciąż oznacza więcej czekania — zawęź daty do 1–2 dni dla szybszego wyniku.</div>
+      <div class="hint">Zaznaczenie „Dokądkolwiek” ignoruje pole poniżej i nic nie pyta AI — zawsze zadziała. Zostawienie pola poniżej całkiem pustego robi to samo. Ale wpisanie w nim czegoś w stylu „gdziekolwiek” zamiast zostawienia go pustym trafia do AI jak każde inne zapytanie i może zostać źle zrozumiane — stąd osobny checkbox. AI dopasowuje kraje z listy lotnisk powyżej, a preferencje pogodowe — do historycznych danych klimatycznych dla wybranego miesiąca wylotu.</div>
+      <div class="warn">⚠️ Szerokie zapytanie (albo „Dokądkolwiek”) w połączeniu z wieloma datami wciąż oznacza więcej czekania — zawęź daty do 1–2 dni dla szybszego wyniku.</div>
     </fieldset>
 
     <fieldset>
@@ -227,6 +228,17 @@
     searchInput.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') { suggestionsBox.hidden = true; searchInput.blur(); }
     });
+
+    // "Dokądkolwiek" checkbox short-circuits the AI query entirely (see
+    // webapp.py) — grey out the text field while it's checked so it's
+    // obvious the field is being ignored, not silently overridden.
+    var anywhereCheckbox = document.getElementById('anywhere-destinations');
+    var travelQueryInput = document.getElementById('travel_query');
+    function syncAnywhereState() {
+      travelQueryInput.disabled = anywhereCheckbox.checked;
+    }
+    anywhereCheckbox.addEventListener('change', syncAnywhereState);
+    syncAnywhereState();
 
     fetch('/static/airports.json')
       .then(function (r) { return r.json(); })
