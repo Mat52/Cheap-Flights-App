@@ -2,6 +2,12 @@ body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; 
 h1 { font-size: 1.4rem; }
 fieldset { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1.5rem; }
 legend { padding: 0 0.5rem; font-weight: 600; }
+details.advanced { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1.5rem; padding: 0 0.9rem; }
+details.advanced summary { padding: 0.7rem 0; font-weight: 600; cursor: pointer; list-style: none; color: #444; }
+details.advanced summary::-webkit-details-marker { display: none; }
+details.advanced summary::before { content: '▸ '; }
+details.advanced[open] summary::before { content: '▾ '; }
+details.advanced .advanced-body { padding-bottom: 0.9rem; }
 label { display: block; font-size: 0.85rem; margin-top: 0.75rem; color: #444; }
 input[type=text], input[type=number], input[type=date], textarea {
   width: 100%; box-sizing: border-box; padding: 0.4rem; margin-top: 0.2rem;

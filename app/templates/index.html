@@ -40,14 +40,14 @@
           <div id="destinations-chips" class="chips"></div>
           <input type="text" id="destinations" name="destinations" value="{{ form.destinations }}" class="codes-field" placeholder="BCN, GRO">
           <label class="pick" style="margin-top:0.5rem;"><input type="checkbox" id="anywhere-toggle" style="width:auto;">🌍 Dokądkolwiek — przeszukaj wszystkie lotniska z listy</label>
-          <div class="warn">⚠️ Wiele lotnisk × wiele dat = bardzo dużo zapytań do Google Flights (minuty, czasem dziesiątki minut). Przy trybie "Dokądkolwiek" zawęź daty do 1–2 dni.</div>
+          <div class="warn">⚠️ Wiele lotnisk × wiele dat wciąż oznacza więcej czekania — przy trybie "Dokądkolwiek" zawęź daty do 1–2 dni, żeby wynik pojawił się szybko.</div>
         </div>
       </div>
       <div class="hint">Znasz kod IATA lotniska spoza listy? Możesz go dopisać ręcznie w polu tekstowym powyżej.</div>
     </fieldset>
 
     <fieldset>
-      <legend>Daty</legend>
+      <legend>Kiedy i za ile</legend>
       <div class="row">
         <div>
           <label for="departure_start">Wylot od</label>
@@ -68,37 +68,39 @@
           <input type="date" id="return_end" name="return_end" value="{{ form.return_end }}">
         </div>
       </div>
-      <div class="row">
-        <div>
-          <label for="min_days">Min. dni pobytu</label>
-          <input type="number" id="min_days" name="min_days" value="{{ form.min_days }}" min="0">
-        </div>
-        <div>
-          <label for="max_days">Maks. dni pobytu</label>
-          <input type="number" id="max_days" name="max_days" value="{{ form.max_days }}" min="0">
-        </div>
-      </div>
+      <label for="price_threshold">💰 Twój budżet (PLN, tam i z powrotem razem) — okazje poniżej są podświetlane</label>
+      <input type="number" id="price_threshold" name="price_threshold" value="{{ form.price_threshold }}" min="0" step="1">
     </fieldset>
 
-    <fieldset>
-      <legend>Zaawansowane (opcjonalnie)</legend>
-      <div class="row">
-        <div>
-          <label for="grupy_baz">Lotniska bazowe traktowane jako zamienne (jedna grupa na linię)</label>
-          <textarea id="grupy_baz" name="grupy_baz" placeholder="KRK, KTW">{{ form.grupy_baz }}</textarea>
-          <div class="hint">Pozwala wylecieć z jednego lotniska, a wrócić do innego z tej samej grupy.</div>
+    <details class="advanced">
+      <summary>⚙️ Więcej opcji (opcjonalnie)</summary>
+      <div class="advanced-body">
+        <div class="row">
+          <div>
+            <label for="min_days">Min. dni pobytu</label>
+            <input type="number" id="min_days" name="min_days" value="{{ form.min_days }}" min="0">
+          </div>
+          <div>
+            <label for="max_days">Maks. dni pobytu</label>
+            <input type="number" id="max_days" name="max_days" value="{{ form.max_days }}" min="0">
+          </div>
         </div>
-        <div>
-          <label for="grupy_destynacji">Lotniska docelowe traktowane jako zamienne (jedna grupa na linię)</label>
-          <textarea id="grupy_destynacji" name="grupy_destynacji" placeholder="BCN, GRO">{{ form.grupy_destynacji }}</textarea>
-          <div class="hint">Np. dolecieć do BCN, a wylecieć z powrotem z GRO.</div>
+        <div class="row">
+          <div>
+            <label for="grupy_baz">Lotniska bazowe traktowane jako zamienne (jedna grupa na linię)</label>
+            <textarea id="grupy_baz" name="grupy_baz" placeholder="KRK, KTW">{{ form.grupy_baz }}</textarea>
+            <div class="hint">Pozwala wylecieć z jednego lotniska, a wrócić do innego z tej samej grupy.</div>
+          </div>
+          <div>
+            <label for="grupy_destynacji">Lotniska docelowe traktowane jako zamienne (jedna grupa na linię)</label>
+            <textarea id="grupy_destynacji" name="grupy_destynacji" placeholder="BCN, GRO">{{ form.grupy_destynacji }}</textarea>
+            <div class="hint">Np. dolecieć do BCN, a wylecieć z powrotem z GRO.</div>
+          </div>
         </div>
+        <label><input type="checkbox" name="notify_telegram" {% if form.notify_telegram %}checked{% endif %} style="width:auto;display:inline;margin-right:0.4rem;">Wyślij powiadomienie Telegram dla znalezionych okazji</label>
+        <label><input type="checkbox" name="use_cache" {% if form.use_cache %}checked{% endif %} style="width:auto;display:inline;margin-right:0.4rem;">Użyj cache — pomiń odcinki zeskrobane niedawno zamiast szukać ich ponownie</label>
       </div>
-      <label for="price_threshold">Próg ceny (PLN, suma tam i z powrotem) — okazje poniżej są podświetlane i wysyłane na Telegram</label>
-      <input type="number" id="price_threshold" name="price_threshold" value="{{ form.price_threshold }}" min="0" step="1">
-      <label><input type="checkbox" name="notify_telegram" {% if form.notify_telegram %}checked{% endif %} style="width:auto;display:inline;margin-right:0.4rem;">Wyślij powiadomienie Telegram dla znalezionych okazji</label>
-      <label><input type="checkbox" name="use_cache" {% if form.use_cache %}checked{% endif %} style="width:auto;display:inline;margin-right:0.4rem;">Użyj cache — pomiń odcinki zeskrobane niedawno zamiast szukać ich ponownie</label>
-    </fieldset>
+    </details>
 
     <button type="submit">🔍 Szukaj</button>
   </form>
