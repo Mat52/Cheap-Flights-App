@@ -1,8 +1,9 @@
+import asyncio
 import os
 
 from dotenv import load_dotenv
 from flask import Flask, render_template, request
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 
 import database
 from core.search import run_search, znajdz_polaczenia_dwustronne
@@ -13,6 +14,12 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# How many Google Flights pages to scrape at once (raise cautiously — too
+# high risks Google's own rate limiting/bot detection kicking in sooner).
+SCRAPE_CONCURRENCY = int(os.getenv("SCRAPE_CONCURRENCY", "5"))
+# How fresh a previously-scraped leg has to be to reuse it instead of
+# scraping again; 0 disables the cache outright.
+CACHE_MAX_AGE_MINUTES = int(os.getenv("CACHE_MAX_AGE_MINUTES", "30"))
 
 app = Flask(__name__)
 
@@ -50,6 +57,7 @@ DEFAULTS = {
     "max_days": "5",
     "price_threshold": "500",
     "notify_telegram": True,
+    "use_cache": True,
 }
 
 
@@ -94,6 +102,7 @@ def index():
             "max_days": request.form.get("max_days", DEFAULTS["max_days"]),
             "price_threshold": request.form.get("price_threshold", DEFAULTS["price_threshold"]),
             "notify_telegram": request.form.get("notify_telegram") == "on",
+            "use_cache": request.form.get("use_cache") == "on",
         })
 
         try:
@@ -126,23 +135,28 @@ def index():
                 except Exception as e:
                     print(f"⚠️ Nie udało się zapisać lotu do bazy: {e}")
 
-            # A fresh Playwright instance per request, not a shared/cached one:
-            # the sync API binds its internal dispatcher to the greenlet that
-            # started it, which doesn't survive being reused from a later,
-            # separate request.
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                try:
-                    context = browser.new_context()
-                    page = context.new_page()
-                    # Bounds every Playwright wait that doesn't specify its own
-                    # timeout (e.g. text_content()) — without this, Playwright's
-                    # own default is 30s, and those can stack up into a search
-                    # that hangs for minutes with the whole page unresponsive.
-                    page.set_default_timeout(8000)
-                    results, offers = run_search(page, params, on_result=persist)
-                finally:
-                    browser.close()
+            cache_minutes = CACHE_MAX_AGE_MINUTES if form["use_cache"] else 0
+
+            async def do_search():
+                # A fresh Playwright driver per request, not a shared/cached
+                # one: the async API's dispatcher is bound to the event loop
+                # that started it, which doesn't survive being reused from a
+                # later, separate asyncio.run() call. launch_browser is only
+                # actually invoked by run_search if some leg isn't already
+                # covered by the cache.
+                async with async_playwright() as p:
+                    async def launch_browser():
+                        return await p.chromium.launch(headless=True)
+
+                    return await run_search(
+                        launch_browser,
+                        params,
+                        on_result=persist,
+                        concurrency=SCRAPE_CONCURRENCY,
+                        cache_max_age_minutes=cache_minutes,
+                    )
+
+            results, offers = asyncio.run(do_search())
 
             good_offers = [o for o in offers if o["cena"] < price_threshold]
             if good_offers and form["notify_telegram"]:
@@ -236,6 +250,8 @@ def saved():
 
 
 if __name__ == "__main__":
-    # threaded=False: Playwright's sync API can only run one browser session
-    # at a time per process, so searches are handled one request at a time.
+    # threaded=False: one browser session (and its own asyncio.run() event
+    # loop) per process at a time — requests are still handled one at a
+    # time; the concurrency added in core.search happens *within* a single
+    # request's search, across its many legs, not across separate requests.
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False, threaded=False)

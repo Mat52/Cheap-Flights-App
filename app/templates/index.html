@@ -97,13 +97,14 @@
       <label for="price_threshold">Próg ceny (PLN, suma tam i z powrotem) — okazje poniżej są podświetlane i wysyłane na Telegram</label>
       <input type="number" id="price_threshold" name="price_threshold" value="{{ form.price_threshold }}" min="0" step="1">
       <label><input type="checkbox" name="notify_telegram" {% if form.notify_telegram %}checked{% endif %} style="width:auto;display:inline;margin-right:0.4rem;">Wyślij powiadomienie Telegram dla znalezionych okazji</label>
+      <label><input type="checkbox" name="use_cache" {% if form.use_cache %}checked{% endif %} style="width:auto;display:inline;margin-right:0.4rem;">Użyj cache — pomiń odcinki zeskrobane niedawno zamiast szukać ich ponownie</label>
     </fieldset>
 
     <button type="submit">🔍 Szukaj</button>
   </form>
 
   {% if results is not none %}
-    <p class="muted">💾 Każdy znaleziony lot zapisywany jest do bazy — <a href="/saved">przeglądaj wszystkie zapisane dotąd oferty</a> bez ponownego szukania na żywo.</p>
+    <p class="muted">💾 Każdy znaleziony lot zapisywany jest do bazy — <a href="/saved">przeglądaj wszystkie zapisane dotąd oferty</a> bez ponownego szukania na żywo. Odcinki zeskrobane niedawno (patrz "Użyj cache" powyżej) są też brane wprost z bazy zamiast ponownie odpytywać Google Flights.</p>
     <h2>📋 Znalezione połączenia ({{ results|length }})</h2>
     {% if results %}
       <table>

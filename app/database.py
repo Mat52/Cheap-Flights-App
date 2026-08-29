@@ -68,6 +68,45 @@ def save_flight_result(result: dict):
     )
 
 
+def get_recent_flight(origin, destination, date, max_age_minutes=30):
+    """Return the most recently scraped flight for this exact one-way leg
+    (origin, destination, date) if it was scraped within the last
+    `max_age_minutes` minutes, else None.
+
+    This is the search's cache: a live search checks this before scraping a
+    leg from Google Flights, so re-running an overlapping search shortly
+    after doesn't repeat work that's still fresh. Best-effort like the rest
+    of this module — if the DB is unreachable, callers just treat it as a
+    cache miss and scrape live.
+    """
+    try:
+        conn = get_connection()
+    except Exception as e:
+        print(f"⚠️ Baza niedostępna, pomijam cache dla {origin}->{destination} {date}: {e}")
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT origin, destination, date, price, airline, departure, arrival
+               FROM flights
+               WHERE origin = %s AND destination = %s AND date = %s
+                 AND scraped_at >= NOW() - make_interval(mins => %s)
+               ORDER BY scraped_at DESC
+               LIMIT 1""",
+            (origin, destination, date, max_age_minutes),
+        )
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return None
+    return {
+        "origin": row[0], "destination": row[1], "date": row[2], "price": row[3],
+        "Airline": row[4], "departure": row[5], "arrival": row[6],
+    }
+
+
 def get_all_flights():
     conn = get_connection()
     try:
