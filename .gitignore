@@ -19,3 +19,6 @@ docker-volume-data/
 # System files
 .DS_Store
 Thumbs.db
+
+# Secrets - copy .env.example to .env and never commit it
+.env

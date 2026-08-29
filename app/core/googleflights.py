@@ -6,7 +6,7 @@ def search_flight_google(page, origin, destination, date_out, cookies):
         try:
             url = f"https://www.google.com/travel/flights?hl=pl&q=flights+from+{origin}+to+{destination}+on+{date_out}+oneway"
             print(f"🌐 Otwieram: {url}")
-            page.goto(url)
+            page.goto(url, timeout=15000)
 
             if(cookies == True):
                 try:

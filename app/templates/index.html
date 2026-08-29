@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <title>✈️ Cheap Flights</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>✈️ Cheap Flights</h1>
+  <div class="nav">
+    <a href="/" class="active">🌐 Szukaj na żywo</a>
+    <a href="/saved">💾 Przeglądaj zapisane oferty</a>
+  </div>
+
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% if telegram_sent %}<div class="ok">📨 Wysłano powiadomienie na Telegram.</div>{% endif %}
+  {% if not telegram_configured %}<div class="muted">ℹ️ Telegram nie skonfigurowany (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) — powiadomienia będą pomijane.</div>{% endif %}
+
+  <form method="post" id="search-form">
+    <fieldset>
+      <legend>Trasa — najpopularniejsze lotniska Ryanair / Wizz Air / easyJet w Europie</legend>
+
+      <label for="airport-filter">Filtruj listę (miasto, kraj lub kod)</label>
+      <input type="text" id="airport-filter" placeholder="np. Kraków, Hiszpania, BCN" autocomplete="off">
+
+      <div id="airport-map"></div>
+      <div class="hint">Kliknij nazwę lotniska na liście lub znacznik na mapie, żeby zobaczyć je na mapie / dodać jako wylot lub cel poniższymi checkboxami.</div>
+
+      <div id="airport-table"><p class="muted" style="padding:0.6rem;">Ładowanie listy lotnisk…</p></div>
+
+      <div class="row" style="margin-top: 0.8rem;">
+        <div>
+          <label>Lotniska wylotu</label>
+          <div id="origins-chips" class="chips"></div>
+          <input type="text" id="origins" name="origins" value="{{ form.origins }}" class="codes-field" placeholder="KRK, KTW">
+        </div>
+        <div>
+          <label>Lotniska docelowe</label>
+          <div id="destinations-chips" class="chips"></div>
+          <input type="text" id="destinations" name="destinations" value="{{ form.destinations }}" class="codes-field" placeholder="BCN, GRO">
+          <label class="pick" style="margin-top:0.5rem;"><input type="checkbox" id="anywhere-toggle" style="width:auto;">🌍 Dokądkolwiek — przeszukaj wszystkie lotniska z listy</label>
+          <div class="warn">⚠️ Wiele lotnisk × wiele dat = bardzo dużo zapytań do Google Flights (minuty, czasem dziesiątki minut). Przy trybie "Dokądkolwiek" zawęź daty do 1–2 dni.</div>
+        </div>
+      </div>
+      <div class="hint">Znasz kod IATA lotniska spoza listy? Możesz go dopisać ręcznie w polu tekstowym powyżej.</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Daty</legend>
+      <div class="row">
+        <div>
+          <label for="departure_start">Wylot od</label>
+          <input type="date" id="departure_start" name="departure_start" value="{{ form.departure_start }}">
+        </div>
+        <div>
+          <label for="departure_end">Wylot do</label>
+          <input type="date" id="departure_end" name="departure_end" value="{{ form.departure_end }}">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="return_start">Powrót od</label>
+          <input type="date" id="return_start" name="return_start" value="{{ form.return_start }}">
+        </div>
+        <div>
+          <label for="return_end">Powrót do</label>
+          <input type="date" id="return_end" name="return_end" value="{{ form.return_end }}">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="min_days">Min. dni pobytu</label>
+          <input type="number" id="min_days" name="min_days" value="{{ form.min_days }}" min="0">
+        </div>
+        <div>
+          <label for="max_days">Maks. dni pobytu</label>
+          <input type="number" id="max_days" name="max_days" value="{{ form.max_days }}" min="0">
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Zaawansowane (opcjonalnie)</legend>
+      <div class="row">
+        <div>
+          <label for="grupy_baz">Lotniska bazowe traktowane jako zamienne (jedna grupa na linię)</label>
+          <textarea id="grupy_baz" name="grupy_baz" placeholder="KRK, KTW">{{ form.grupy_baz }}</textarea>
+          <div class="hint">Pozwala wylecieć z jednego lotniska, a wrócić do innego z tej samej grupy.</div>
+        </div>
+        <div>
+          <label for="grupy_destynacji">Lotniska docelowe traktowane jako zamienne (jedna grupa na linię)</label>
+          <textarea id="grupy_destynacji" name="grupy_destynacji" placeholder="BCN, GRO">{{ form.grupy_destynacji }}</textarea>
+          <div class="hint">Np. dolecieć do BCN, a wylecieć z powrotem z GRO.</div>
+        </div>
+      </div>
+      <label for="price_threshold">Próg ceny (PLN, suma tam i z powrotem) — okazje poniżej są podświetlane i wysyłane na Telegram</label>
+      <input type="number" id="price_threshold" name="price_threshold" value="{{ form.price_threshold }}" min="0" step="1">
+      <label><input type="checkbox" name="notify_telegram" {% if form.notify_telegram %}checked{% endif %} style="width:auto;display:inline;margin-right:0.4rem;">Wyślij powiadomienie Telegram dla znalezionych okazji</label>
+    </fieldset>
+
+    <button type="submit">🔍 Szukaj</button>
+  </form>
+
+  {% if results is not none %}
+    <p class="muted">💾 Każdy znaleziony lot zapisywany jest do bazy — <a href="/saved">przeglądaj wszystkie zapisane dotąd oferty</a> bez ponownego szukania na żywo.</p>
+    <h2>📋 Znalezione połączenia ({{ results|length }})</h2>
+    {% if results %}
+      <table>
+        <tr><th>Skąd</th><th>Dokąd</th><th>Data</th><th>Linia</th><th>Wylot</th><th>Przylot</th><th>Cena</th></tr>
+        {% for r in results %}
+          <tr>
+            <td>{{ r.origin }}</td><td>{{ r.destination }}</td><td>{{ r.date }}</td>
+            <td>{{ r.Airline }}</td><td>{{ r.departure }}</td><td>{{ r.arrival }}</td>
+            <td>{{ r.price }} PLN</td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="muted">Brak wyników dla podanych parametrów.</p>
+    {% endif %}
+
+    <h2>💰 Okazje tam i z powrotem ({{ offers|length }})</h2>
+    {% if offers %}
+      <table>
+        <tr><th>Tam</th><th>Powrót</th><th>Pobyt</th><th>Suma</th></tr>
+        {% for o in offers %}
+          <tr {% if price_threshold is not none and o.cena < price_threshold %}class="good"{% endif %}>
+            <td>{{ o.tam.origin }}→{{ o.tam.destination }} {{ o.tam.date }} ({{ o.tam.Airline }}, {{ o.tam.price }} PLN)</td>
+            <td>{{ o.powrot.origin }}→{{ o.powrot.destination }} {{ o.powrot.date }} ({{ o.powrot.Airline }}, {{ o.powrot.price }} PLN)</td>
+            <td>{{ o.pobyt }} dni</td>
+            <td><strong>{{ o.cena }} PLN</strong></td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="muted">Nie znaleziono pasujących połączeń tam i z powrotem.</p>
+    {% endif %}
+  {% endif %}
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    var originsInput = document.getElementById('origins');
+    var destinationsInput = document.getElementById('destinations');
+    var originsChips = document.getElementById('origins-chips');
+    var destinationsChips = document.getElementById('destinations-chips');
+    var anywhereToggle = document.getElementById('anywhere-toggle');
+    var airportTable = document.getElementById('airport-table');
+
+    var airports = [];
+    var airportByCode = {};
+    var map = null;
+    var markersByCode = {};
+
+    function parseCodes(raw) {
+      return raw.split(',').map(function (s) { return s.trim().toUpperCase(); }).filter(Boolean);
+    }
+
+    function inputFor(role) { return role === 'origin' ? originsInput : destinationsInput; }
+    function chipsFor(role) { return role === 'origin' ? originsChips : destinationsChips; }
+
+    function renderChips(role) {
+      var inputEl = inputFor(role);
+      var chipsEl = chipsFor(role);
+      var codes = parseCodes(inputEl.value);
+
+      if (role === 'destination' && anywhereToggle && anywhereToggle.checked) {
+        chipsEl.innerHTML = '';
+        var summary = document.createElement('span');
+        summary.className = 'chip summary';
+        summary.textContent = '🌍 Wszystkie lotniska z listy (' + airports.length + ')';
+        chipsEl.appendChild(summary);
+        return;
+      }
+
+      chipsEl.innerHTML = '';
+      codes.forEach(function (code) {
+        var chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = code;
+        var x = document.createElement('button');
+        x.type = 'button';
+        x.textContent = '×';
+        x.title = 'Usuń ' + code;
+        x.onclick = function () { setCode(role, code, false); };
+        chip.appendChild(x);
+        chipsEl.appendChild(chip);
+      });
+    }
+
+    function syncCheckboxes(role) {
+      var codes = parseCodes(inputFor(role).value);
+      document.querySelectorAll('input[type=checkbox][data-role="' + role + '"]').forEach(function (cb) {
+        cb.checked = codes.indexOf(cb.dataset.code) !== -1;
+      });
+    }
+
+    function sync(role) {
+      renderChips(role);
+      syncCheckboxes(role);
+    }
+
+    function setCode(role, code, present) {
+      var inputEl = inputFor(role);
+      var codes = parseCodes(inputEl.value);
+      var idx = codes.indexOf(code);
+      if (present && idx === -1) codes.push(code);
+      if (!present && idx !== -1) codes.splice(idx, 1);
+      inputEl.value = codes.join(', ');
+      sync(role);
+    }
+
+    originsInput.addEventListener('input', function () { sync('origin'); });
+    destinationsInput.addEventListener('input', function () { sync('destination'); });
+
+    anywhereToggle.addEventListener('change', function () {
+      airportTable.classList.toggle('dest-disabled', anywhereToggle.checked);
+      renderChips('destination');
+    });
+
+    // before the actual POST, expand "anywhere" into the real destination list
+    document.getElementById('search-form').addEventListener('submit', function () {
+      if (anywhereToggle.checked) {
+        var origins = parseCodes(originsInput.value);
+        var all = airports.map(function (a) { return a.code; }).filter(function (c) { return origins.indexOf(c) === -1; });
+        destinationsInput.value = all.join(', ');
+      }
+    });
+
+    function popupHtml(a) {
+      var cityLabel = a.city_pl ? a.city_pl + ' (' + a.city + ')' : a.city;
+      return '<div class="airport-popup"><strong>' + a.name + '</strong><br>' + cityLabel + ', ' + a.country +
+        '<br><span class="code">' + a.code + '</span><br>' +
+        '<button type="button" onclick="setCode(\'origin\', \'' + a.code + '\', true)">➕ Wylot</button>' +
+        '<button type="button" onclick="setCode(\'destination\', \'' + a.code + '\', true)">➕ Cel</button></div>';
+    }
+
+    function flyTo(code) {
+      var a = airportByCode[code];
+      if (a && map) {
+        map.setView([a.lat, a.lon], 8);
+        if (markersByCode[code]) markersByCode[code].openPopup();
+      }
+    }
+
+    function initMap() {
+      map = L.map('airport-map').setView([48, 12], 4);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 18,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(map);
+      airports.forEach(function (a) {
+        var marker = L.marker([a.lat, a.lon]).addTo(map);
+        marker.bindPopup(popupHtml(a));
+        markersByCode[a.code] = marker;
+      });
+    }
+
+    function buildTable() {
+      airportTable.innerHTML = '';
+      var byRegion = {};
+      var order = [];
+      airports.forEach(function (a) {
+        if (!byRegion[a.region]) { byRegion[a.region] = []; order.push(a.region); }
+        byRegion[a.region].push(a);
+      });
+      order.forEach(function (region) {
+        var group = document.createElement('div');
+        group.className = 'region-group';
+        group.dataset.region = region;
+
+        var heading = document.createElement('div');
+        heading.className = 'region-name';
+        heading.textContent = region;
+        group.appendChild(heading);
+
+        byRegion[region].forEach(function (a) {
+          var row = document.createElement('div');
+          row.className = 'airport-row';
+          row.dataset.search = (a.city + ' ' + (a.city_pl || '') + ' ' + a.name + ' ' + a.code + ' ' + a.region).toLowerCase();
+
+          var name = document.createElement('span');
+          name.className = 'name';
+          name.textContent = (a.city_pl ? a.city_pl + ' (' + a.city + ')' : a.city) + ' — ' + a.name;
+          name.onclick = function () { flyTo(a.code); };
+
+          var code = document.createElement('span');
+          code.className = 'code';
+          code.textContent = a.code;
+
+          var pickOrigin = document.createElement('label');
+          pickOrigin.className = 'pick';
+          var cbOrigin = document.createElement('input');
+          cbOrigin.type = 'checkbox';
+          cbOrigin.dataset.code = a.code;
+          cbOrigin.dataset.role = 'origin';
+          cbOrigin.addEventListener('change', function () { setCode('origin', a.code, cbOrigin.checked); });
+          pickOrigin.appendChild(cbOrigin);
+          pickOrigin.appendChild(document.createTextNode(' wylot'));
+
+          var pickDest = document.createElement('label');
+          pickDest.className = 'pick';
+          var cbDest = document.createElement('input');
+          cbDest.type = 'checkbox';
+          cbDest.dataset.code = a.code;
+          cbDest.dataset.role = 'destination';
+          cbDest.addEventListener('change', function () { setCode('destination', a.code, cbDest.checked); });
+          pickDest.appendChild(cbDest);
+          pickDest.appendChild(document.createTextNode(' cel'));
+
+          row.appendChild(name);
+          row.appendChild(code);
+          row.appendChild(pickOrigin);
+          row.appendChild(pickDest);
+          group.appendChild(row);
+        });
+        airportTable.appendChild(group);
+      });
+      sync('origin');
+      sync('destination');
+    }
+
+    var airportFilter = document.getElementById('airport-filter');
+    airportFilter.addEventListener('input', function () {
+      var q = airportFilter.value.trim().toLowerCase();
+      document.querySelectorAll('.region-group').forEach(function (group) {
+        var anyVisible = false;
+        group.querySelectorAll('.airport-row').forEach(function (row) {
+          var match = !q || row.dataset.search.indexOf(q) !== -1;
+          row.style.display = match ? '' : 'none';
+          if (match) anyVisible = true;
+        });
+        group.style.display = anyVisible ? '' : 'none';
+      });
+    });
+
+    fetch('/static/airports.json')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        airports = data;
+        airports.forEach(function (a) { airportByCode[a.code] = a; });
+        initMap();
+        buildTable();
+      })
+      .catch(function (e) {
+        airportTable.innerHTML = '<p class="muted" style="padding:0.6rem;">Nie udało się wczytać listy lotnisk.</p>';
+        console.error(e);
+      });
+  </script>
+</body>
+</html>
