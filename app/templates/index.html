@@ -15,6 +15,7 @@
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
   {% if telegram_sent %}<div class="ok">📨 Wysłano powiadomienie na Telegram.</div>{% endif %}
   {% if intent_summary %}<div class="ok">{{ intent_summary }}</div>{% endif %}
+  {% if date_intent_summary %}<div class="ok">{{ date_intent_summary }}</div>{% endif %}
   {% if not telegram_configured %}<div class="muted">ℹ️ Telegram nie skonfigurowany (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) — powiadomienia będą pomijane.</div>{% endif %}
 
   <form method="post" id="search-form">
@@ -42,7 +43,12 @@
 
     <fieldset>
       <legend>Kiedy i za ile</legend>
-      <div class="row">
+      <label for="date_query">Kiedy chcesz polecieć? (opcjonalnie — opisz zamiast wybierać dokładne daty)</label>
+      <input type="text" id="date_query" name="date_query" value="{{ form.date_query }}"
+             placeholder='np. "weekend we wrześniu", "długi weekend w październiku", "od 10 do 20 września", "tydzień w listopadzie"'>
+      <div class="hint">Jeśli wypełnisz to pole, dokładne daty poniżej są ignorowane — AI ustali konkretne dni wylotu/powrotu (i długość pobytu, jeśli to sensowne, np. dla weekendu).</div>
+
+      <div class="row" style="margin-top: 0.8rem;">
         <div>
           <label for="departure_start">Wylot od</label>
           <input type="date" id="departure_start" name="departure_start" value="{{ form.departure_start }}">

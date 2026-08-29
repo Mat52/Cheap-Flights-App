@@ -15,20 +15,11 @@ returns is re-verified in plain Python against the actual query text before
 being trusted (see _verify_against_query) — this is not optional polish,
 it's what makes the local-model answer safe to act on.
 """
-import json
-import os
 import re
 import unicodedata
 
-import requests
-
 from core import weather
-
-# http://host.docker.internal:11434 if the web app runs in Docker and Ollama
-# runs on the host — see docker-compose.yml.
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
-REQUEST_TIMEOUT_SECONDS = 60
+from core.ollama_client import call_ollama_json
 
 # Keywords that indicate the query expresses *some* weather/temperature
 # preference at all — if none of these appear, any min_avg_temp_c the model
@@ -110,38 +101,6 @@ def _schema(countries: list[str]) -> dict:
     }
 
 
-def _call_ollama(query: str, countries: list[str]) -> dict:
-    try:
-        response = requests.post(
-            f"{OLLAMA_HOST}/api/chat",
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [{"role": "user", "content": _build_prompt(query, countries)}],
-                "stream": False,
-                "format": _schema(countries),
-                "options": {"temperature": 0, "num_predict": 200},
-            },
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-    except requests.exceptions.ConnectionError as e:
-        raise RuntimeError(
-            "Nie można połączyć się z Ollama (http://localhost:11434) — uruchom `ollama serve` "
-            "(albo `brew services start ollama`) i upewnij się, że model jest pobrany: "
-            f"`ollama pull {OLLAMA_MODEL}`."
-        ) from e
-    except requests.exceptions.Timeout as e:
-        raise RuntimeError("Ollama nie odpowiedziało w rozsądnym czasie — spróbuj ponownie.") from e
-    except requests.exceptions.RequestException as e:
-        raise RuntimeError(f"Błąd zapytania do Ollama: {e}") from e
-
-    content = response.json()["message"]["content"]
-    try:
-        return json.loads(content)
-    except (json.JSONDecodeError, KeyError) as e:
-        raise RuntimeError(f"Ollama zwróciło nieoczekiwaną odpowiedź: {e}") from e
-
-
 def _verify_against_query(result: dict, query: str) -> dict:
     """Re-check the model's answer against the actual query text — see the
     module docstring for why this isn't optional. Every country has to be
@@ -183,7 +142,7 @@ def parse_travel_query(query: str, countries: list[str], translations: dict) -> 
     Raises RuntimeError with a Polish, user-facing message if Ollama itself
     is unreachable/misconfigured.
     """
-    raw = _call_ollama(_restore_diacritics(query, translations), countries)
+    raw = call_ollama_json(_build_prompt(_restore_diacritics(query, translations), countries), _schema(countries))
     raw["_translations"] = translations
     return _verify_against_query(raw, query)
 

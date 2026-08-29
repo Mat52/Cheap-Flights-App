@@ -11,6 +11,7 @@ from playwright.async_api import async_playwright
 
 import database
 from core.airports import load_airports
+from core.date_intent import resolve_dates
 from core.search import build_legs, run_search, znajdz_polaczenia_dwustronne
 from core.telegram import wyslij_telegram
 from core.travel_intent import resolve_destinations
@@ -70,6 +71,7 @@ def parse_groups(raw: str):
 DEFAULTS = {
     "origins": "KRK, KTW",
     "travel_query": "",
+    "date_query": "",
     "grupy_baz": "KRK, KTW",
     "grupy_destynacji": "",
     "departure_start": "",
@@ -126,7 +128,41 @@ def run_search_job(search_id, form):
             JOBS[search_id].update(status="done", error=message)
 
     try:
-        departure_month = datetime.strptime(form["departure_start"], "%Y-%m-%d").month
+        # Dates: the free-text "Kiedy?" query, when given, takes priority
+        # over the exact date pickers — AI-resolved into concrete dates (and
+        # possibly its own stay-length preference) by resolve_dates(), which
+        # falls back to None if it can't recognize a month in the query at
+        # all (nothing worth overriding manual dates with).
+        date_result = None
+        if form["date_query"].strip():
+            try:
+                date_result = resolve_dates(form["date_query"])
+            except RuntimeError as e:
+                return fail(str(e))
+            if date_result:
+                with JOBS_LOCK:
+                    JOBS[search_id]["date_intent_summary"] = date_result["summary"]
+
+        if date_result:
+            dates_departure = date_result["dates_departure"]
+            dates_back = date_result["dates_back"]
+            min_days = date_result["min_days"] if date_result["min_days"] is not None else int(form["min_days"])
+            max_days = date_result["max_days"] if date_result["max_days"] is not None else int(form["max_days"])
+        elif form["departure_start"] and form["departure_end"] and form["return_start"] and form["return_end"]:
+            dates_departure = generate_dates(form["departure_start"], form["departure_end"])
+            dates_back = generate_dates(form["return_start"], form["return_end"])
+            min_days = int(form["min_days"])
+            max_days = int(form["max_days"])
+        else:
+            return fail(
+                f"Nie rozpoznano dat z zapytania „{form['date_query']}”. "
+                "Podaj dokładne daty w polach powyżej albo doprecyzuj zapytanie (np. podaj nazwę miesiąca)."
+            )
+
+        if not dates_departure or not dates_back:
+            return fail("Brak dat pasujących do zapytania — spróbuj innego miesiąca albo podaj dokładne daty.")
+
+        departure_month = datetime.strptime(dates_departure[0], "%Y-%m-%d").month
         try:
             destinations, intent = resolve_destinations(form["travel_query"], load_airports(), departure_month)
         except RuntimeError as e:
@@ -146,12 +182,12 @@ def run_search_job(search_id, form):
         params = {
             "origins": parse_codes(form["origins"]),
             "destinations": destinations,
-            "dates_departure": generate_dates(form["departure_start"], form["departure_end"]),
-            "dates_back": generate_dates(form["return_start"], form["return_end"]),
+            "dates_departure": dates_departure,
+            "dates_back": dates_back,
             "grupy_baz": parse_groups(form["grupy_baz"]),
             "grupy_destynacji": parse_groups(form["grupy_destynacji"]),
-            "min_days": int(form["min_days"]),
-            "max_days": int(form["max_days"]),
+            "min_days": min_days,
+            "max_days": max_days,
         }
         price_threshold = float(form["price_threshold"])
         total_legs = len(build_legs(params))
@@ -222,18 +258,19 @@ def index():
     if request.method == "GET":
         # lets a link (e.g. "no saved results — search live instead" on
         # /saved) pre-fill the airport fields without auto-submitting a search
-        for key in ("origins", "travel_query", "grupy_baz", "grupy_destynacji"):
+        for key in ("origins", "travel_query", "date_query", "grupy_baz", "grupy_destynacji"):
             if request.args.get(key):
                 form[key] = request.args[key]
         return render_template(
             "index.html", form=form, results=None, offers=None, price_threshold=None,
-            error=None, telegram_sent=False,
-            telegram_configured=bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID), intent_summary=None,
+            error=None, telegram_sent=False, telegram_configured=bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+            intent_summary=None, date_intent_summary=None,
         )
 
     form.update({
         "origins": request.form.get("origins", ""),
         "travel_query": request.form.get("travel_query", ""),
+        "date_query": request.form.get("date_query", ""),
         "grupy_baz": request.form.get("grupy_baz", ""),
         "grupy_destynacji": request.form.get("grupy_destynacji", ""),
         "departure_start": request.form.get("departure_start", ""),
@@ -250,18 +287,21 @@ def index():
     # Cheap, synchronous checks only — instant feedback on the same page,
     # same as before. Everything slow (the AI query, the scrape itself)
     # moves into a background thread so the page never just sits frozen.
+    # A filled-in "Kiedy?" query stands in for the exact date pickers, so
+    # they're only required when it's empty.
+    has_date_query = bool(form["date_query"].strip())
     error = None
     if not parse_codes(form["origins"]):
         error = "Podaj przynajmniej jedno lotnisko wylotu."
-    elif not form["departure_start"] or not form["departure_end"]:
-        error = "Podaj zakres dat wylotu."
-    elif not form["return_start"] or not form["return_end"]:
-        error = "Podaj zakres dat powrotu."
+    elif not has_date_query and (not form["departure_start"] or not form["departure_end"]):
+        error = "Podaj zakres dat wylotu (albo opisz je w polu „Kiedy?”)."
+    elif not has_date_query and (not form["return_start"] or not form["return_end"]):
+        error = "Podaj zakres dat powrotu (albo opisz je w polu „Kiedy?”)."
     if error:
         return render_template(
             "index.html", form=form, results=None, offers=None, price_threshold=None,
-            error=error, telegram_sent=False,
-            telegram_configured=bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID), intent_summary=None,
+            error=error, telegram_sent=False, telegram_configured=bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+            intent_summary=None, date_intent_summary=None,
         )
 
     _prune_old_jobs()
@@ -269,8 +309,8 @@ def index():
     with JOBS_LOCK:
         JOBS[search_id] = {
             "status": "resolving", "done": 0, "total": 0, "error": None,
-            "results": None, "offers": None, "intent_summary": None, "telegram_sent": False,
-            "form": dict(form), "created_at": time.time(),
+            "results": None, "offers": None, "intent_summary": None, "date_intent_summary": None,
+            "telegram_sent": False, "form": dict(form), "created_at": time.time(),
         }
     threading.Thread(target=run_search_job, args=(search_id, form), daemon=True).start()
     return redirect(url_for("search_page", search_id=search_id))
@@ -304,6 +344,7 @@ def search_page(search_id):
         telegram_sent=job["telegram_sent"],
         telegram_configured=bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
         intent_summary=job["intent_summary"],
+        date_intent_summary=job["date_intent_summary"],
     )
 
 

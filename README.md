@@ -9,6 +9,7 @@ A small web app for hunting cheap round-trip flights on **Google Flights**. Type
 - Reuses recently-scraped legs straight from Postgres instead of re-scraping them (`CACHE_MAX_AGE_MINUTES`, toggle per-search with "Użyj cache") — a fully-cached repeat search doesn't open a browser at all
 - Pick departure airports without knowing IATA codes: a checkbox list of the ~160 airports most commonly served by Ryanair/Wizz Air/easyJet in Europe (+ nearby leisure destinations), grouped by country, with a search filter (Polish city names included, e.g. "Warszawa", "Rzym") — or type a code by hand if you know one they don't cover
 - **AI destination search**: describe where you want to go in plain language ("Hiszpania", "gdziekolwiek gdzie jest cieplej niż 20°C", "Włochy albo Grecja") and a local Ollama model resolves it against the curated airport list — no cloud API, no key, no cost. Country/region names and any temperature preference the model extracts are re-verified in plain Python against the actual query text and against precomputed historical climate normals for the travel month (see "Known limitations" — local models need this safety net) before being trusted. An empty query searches every curated airport, same as the old "🌍 Dokądkolwiek" mode.
+- **AI date search**: describe when you want to fly ("weekend we wrześniu", "długi weekend w październiku", "od 10 do 20 września", "tydzień w listopadzie") instead of picking exact date ranges — same local Ollama model, but it only extracts a month/day-range/trip-shape (things worth trusting a language model with); every actual calendar date is generated afterward in plain Python (`core/date_intent.py`), so "weekend" reliably means real Thursday/Friday/Saturday departures paired with Saturday/Sunday/Monday returns, never a model guess at which day of the week a date falls on. Optional — leave it empty and the exact date pickers below work exactly as before.
 - Pairs legs into round-trip offers, with optional "these airports count as the same region" grouping (e.g. flew into BCN, fine to fly back from GRO)
 - Persists every scraped flight to Postgres (best-effort — search still works if the DB is unreachable)
 - Sends a Telegram alert for offers under your price threshold, if configured
@@ -50,7 +51,7 @@ pip install -r requirements.txt
 python -m playwright install --with-deps chromium
 ```
 
-### 3. Set up Ollama (for the "Dokąd chcesz polecieć?" AI destination search)
+### 3. Set up Ollama (for the "Dokąd chcesz polecieć?" / "Kiedy chcesz polecieć?" AI search)
 ```bash
 brew install ollama                # macOS; see ollama.com for other platforms
 brew services start ollama
@@ -95,6 +96,8 @@ Cheap-Flights-App/
 │   │   ├── googleflights.py    # Playwright scraper for one Google Flights leg
 │   │   ├── search.py           # scans routes/dates, pairs legs into round-trip offers
 │   │   ├── travel_intent.py    # local Ollama: free-text query -> destination airport codes
+│   │   ├── date_intent.py      # local Ollama + plain Python: free-text query -> concrete dates
+│   │   ├── ollama_client.py    # shared HTTP call to the local Ollama model (JSON-schema constrained)
 │   │   ├── weather.py          # lookup into precomputed climate_normals.json
 │   │   ├── airports.py         # server-side loader for static/airports.json
 │   │   ├── telegram.py         # Telegram sender
@@ -121,7 +124,8 @@ Cheap-Flights-App/
 - The scraper is tightly coupled to the **Polish-locale Google Flights UI** (button text, CSS classes) and short Playwright timeouts — a UI or locale change upstream can silently break it, and errors are logged as "no results found" rather than distinguished from real empty results.
 - A search runs synchronously in the request — the page waits for the whole scrape before showing results, with no progress indicator beyond a spinner. Legs are now scraped concurrently (`SCRAPE_CONCURRENCY`, default 5 at once) and a leg already scraped within `CACHE_MAX_AGE_MINUTES` is reused from Postgres instead of re-scraped, which cuts a lot of the wait for wide searches and for repeat/overlapping ones — but a wide first-time search (many airports/dates, or "🌍 Dokądkolwiek" against all 161 curated airports) can still take a while. Narrow the date range for wide searches.
 - Raising `SCRAPE_CONCURRENCY` too high risks Google rate-limiting or bot-detecting the scraper sooner than the current sequential-ish pace does — there's no backoff/retry on that yet, a blocked leg just comes back as "no results found" like any other scrape failure.
-- AI destination search needs Ollama running locally with `OLLAMA_MODEL` pulled — an empty query ("anywhere") needs neither and makes no model call at all.
+- AI destination/date search needs Ollama running locally with `OLLAMA_MODEL` pulled — an empty query ("anywhere" / exact date pickers) needs neither and makes no model call at all.
+- A "weekend" search scans every Thu/Fri/Sat departure against every Sat/Sun/Mon return across the whole named month, which is a lot more origin×destination×date combinations than a narrow exact-date search (e.g. 21 destinations × 12 candidate departure days × 2 directions = 500+ legs for one origin, one country, one month) — expect it to take a while even with concurrent scraping and the cache. Narrowing to fewer destinations (a more specific "Dokąd?" query) speeds this up more than anything else.
 - The local model (llama3.1:8b) is measurably unreliable on its own for this task: testing turned up both hallucinated countries for places outside this app's network (asked for "Japonia", got back "Italy" instead of "not covered") and invented temperature numbers on queries that never mentioned weather at all (apparently parroted straight from this file's own prompt examples). Every country and temperature the model returns is therefore re-verified against the literal query text in `core/travel_intent.py` before being trusted — a country has to actually be named (or its Polish translation) in the query, and a temperature is only kept if the query mentions weather/temperature at all. This is a real safety net, not a formality: it's what makes the "unsupported place" case report "no matches" instead of a wrong destination. The cost is that genuinely creative geographic expansion (e.g. "southern Europe" meaning several unnamed countries) is less reliable than a hosted frontier model would be, since the safety net can only verify what's actually written in the query.
 - Weather filtering ("somewhere over 20°C") checks a *historical monthly average* (from `climate_normals.json`, 2020–2025), not a real forecast — it tells you what a month is normally like at that airport, not what it'll actually be on your specific dates. Re-run `scripts/fetch_climate_normals.py` occasionally to keep the average current.
 - There's no automated test suite yet.
