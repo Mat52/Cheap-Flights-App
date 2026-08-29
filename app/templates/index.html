@@ -21,19 +21,15 @@
     <fieldset>
       <legend>Skąd lecisz?</legend>
 
-      <label for="airport-filter">Filtruj listę (miasto, kraj lub kod)</label>
-      <input type="text" id="airport-filter" placeholder="np. Kraków, Hiszpania, KRK" autocomplete="off">
-
-      <div id="airport-table"><p class="muted" style="padding:0.6rem;">Ładowanie listy lotnisk…</p></div>
-
-      <div class="row" style="margin-top: 0.8rem;">
-        <div>
-          <label>Lotniska wylotu</label>
-          <div id="origins-chips" class="chips"></div>
-          <input type="text" id="origins" name="origins" value="{{ form.origins }}" class="codes-field" placeholder="KRK, KTW">
-        </div>
+      <label for="airport-search">Szukaj lotniska (miasto, kraj lub kod)</label>
+      <div class="autocomplete">
+        <input type="text" id="airport-search" placeholder="np. Kraków, Hiszpania, KRK" autocomplete="off">
+        <div id="airport-suggestions" class="suggestions" hidden></div>
       </div>
-      <div class="hint">Znasz kod IATA lotniska spoza listy? Możesz go dopisać ręcznie w polu tekstowym powyżej.</div>
+
+      <div id="origins-chips" class="chips" style="margin-top:0.6rem;"></div>
+      <input type="text" id="origins" name="origins" value="{{ form.origins }}" class="codes-field" placeholder="KRK, KTW">
+      <div class="hint">Znasz kod IATA lotniska spoza listy? Możesz go dopisać ręcznie w polu powyżej.</div>
     </fieldset>
 
     <fieldset>
@@ -140,16 +136,19 @@
   {% endif %}
 
   <script>
-    // Origin-only airport picker: filterable list + chips, kept in sync with
-    // the plain-text #origins field (which is what actually gets submitted —
-    // typing an IATA code by hand works too). Destinations are no longer
-    // picked here; they come from the free-text "Dokąd chcesz polecieć?"
-    // query, interpreted server-side.
+    // Origin-only airport picker: a search bar with autocomplete suggestions
+    // (no permanently-visible list), kept in sync with the plain-text
+    // #origins field (which is what actually gets submitted — typing an
+    // IATA code by hand works too). Destinations are no longer picked here;
+    // they come from the free-text "Dokąd chcesz polecieć?" query,
+    // interpreted server-side.
     var originsInput = document.getElementById('origins');
     var originsChips = document.getElementById('origins-chips');
-    var airportTable = document.getElementById('airport-table');
+    var searchInput = document.getElementById('airport-search');
+    var suggestionsBox = document.getElementById('airport-suggestions');
 
     var airports = [];
+    var MAX_SUGGESTIONS = 8;
 
     function parseCodes(raw) {
       return raw.split(',').map(function (s) { return s.trim().toUpperCase(); }).filter(Boolean);
@@ -172,17 +171,7 @@
       });
     }
 
-    function syncCheckboxes() {
-      var codes = parseCodes(originsInput.value);
-      document.querySelectorAll('input[type=checkbox][data-code]').forEach(function (cb) {
-        cb.checked = codes.indexOf(cb.dataset.code) !== -1;
-      });
-    }
-
-    function sync() {
-      renderChips();
-      syncCheckboxes();
-    }
+    originsInput.addEventListener('input', renderChips);
 
     function setCode(code, present) {
       var codes = parseCodes(originsInput.value);
@@ -190,83 +179,57 @@
       if (present && idx === -1) codes.push(code);
       if (!present && idx !== -1) codes.splice(idx, 1);
       originsInput.value = codes.join(', ');
-      sync();
+      renderChips();
     }
 
-    originsInput.addEventListener('input', sync);
-
-    function buildTable() {
-      airportTable.innerHTML = '';
-      var byRegion = {};
-      var order = [];
-      airports.forEach(function (a) {
-        if (!byRegion[a.region]) { byRegion[a.region] = []; order.push(a.region); }
-        byRegion[a.region].push(a);
-      });
-      order.forEach(function (region) {
-        var group = document.createElement('div');
-        group.className = 'region-group';
-        group.dataset.region = region;
-
-        var heading = document.createElement('div');
-        heading.className = 'region-name';
-        heading.textContent = region;
-        group.appendChild(heading);
-
-        byRegion[region].forEach(function (a) {
-          var row = document.createElement('div');
-          row.className = 'airport-row';
-          row.dataset.search = (a.city + ' ' + (a.city_pl || '') + ' ' + a.name + ' ' + a.code + ' ' + a.region).toLowerCase();
-
-          var name = document.createElement('span');
-          name.className = 'name';
-          name.textContent = (a.city_pl ? a.city_pl + ' (' + a.city + ')' : a.city) + ' — ' + a.name;
-
-          var code = document.createElement('span');
-          code.className = 'code';
-          code.textContent = a.code;
-
-          var pick = document.createElement('label');
-          pick.className = 'pick';
-          var cb = document.createElement('input');
-          cb.type = 'checkbox';
-          cb.dataset.code = a.code;
-          cb.addEventListener('change', function () { setCode(a.code, cb.checked); });
-          pick.appendChild(cb);
-          pick.appendChild(document.createTextNode(' wylot'));
-
-          row.appendChild(name);
-          row.appendChild(code);
-          row.appendChild(pick);
-          group.appendChild(row);
-        });
-        airportTable.appendChild(group);
-      });
-      sync();
+    function searchKey(a) {
+      return (a.city + ' ' + (a.city_pl || '') + ' ' + a.name + ' ' + a.code + ' ' + a.country + ' ' + a.region).toLowerCase();
     }
 
-    var airportFilter = document.getElementById('airport-filter');
-    airportFilter.addEventListener('input', function () {
-      var q = airportFilter.value.trim().toLowerCase();
-      document.querySelectorAll('.region-group').forEach(function (group) {
-        var anyVisible = false;
-        group.querySelectorAll('.airport-row').forEach(function (row) {
-          var match = !q || row.dataset.search.indexOf(q) !== -1;
-          row.style.display = match ? '' : 'none';
-          if (match) anyVisible = true;
+    function renderSuggestions() {
+      var q = searchInput.value.trim().toLowerCase();
+      if (!q) { suggestionsBox.hidden = true; suggestionsBox.innerHTML = ''; return; }
+
+      var matches = airports.filter(function (a) { return searchKey(a).indexOf(q) !== -1; }).slice(0, MAX_SUGGESTIONS);
+      suggestionsBox.innerHTML = '';
+      if (!matches.length) {
+        var empty = document.createElement('div');
+        empty.className = 'suggestion muted';
+        empty.textContent = 'Brak lotnisk pasujących do „' + searchInput.value.trim() + '”';
+        suggestionsBox.appendChild(empty);
+      } else {
+        matches.forEach(function (a) {
+          var item = document.createElement('div');
+          item.className = 'suggestion';
+          var label = (a.city_pl ? a.city_pl + ' (' + a.city + ')' : a.city) + ' — ' + a.name;
+          item.innerHTML = label + ' <span class="code">' + a.code + '</span>';
+          item.addEventListener('mousedown', function (e) {
+            e.preventDefault(); // keep focus on the input, don't blur before click registers
+            setCode(a.code, true);
+            searchInput.value = '';
+            suggestionsBox.hidden = true;
+          });
+          suggestionsBox.appendChild(item);
         });
-        group.style.display = anyVisible ? '' : 'none';
-      });
+      }
+      suggestionsBox.hidden = false;
+    }
+
+    searchInput.addEventListener('input', renderSuggestions);
+    searchInput.addEventListener('focus', renderSuggestions);
+    searchInput.addEventListener('blur', function () { suggestionsBox.hidden = true; });
+    searchInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { suggestionsBox.hidden = true; searchInput.blur(); }
     });
 
     fetch('/static/airports.json')
       .then(function (r) { return r.json(); })
       .then(function (data) {
         airports = data;
-        buildTable();
+        renderChips();
       })
       .catch(function (e) {
-        airportTable.innerHTML = '<p class="muted" style="padding:0.6rem;">Nie udało się wczytać listy lotnisk.</p>';
+        searchInput.placeholder = 'Nie udało się wczytać listy lotnisk — wpisz kod ręcznie poniżej';
         console.error(e);
       });
   </script>

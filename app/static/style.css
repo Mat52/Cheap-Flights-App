@@ -49,12 +49,14 @@ tr.good { background: #eaf7ea; }
 .chip button { margin: 0 0 0 0.15rem; background: none; border: none; color: inherit; cursor: pointer; font-size: 0.95rem; padding: 0 0.25rem; }
 .codes-field { font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; }
 
-#airport-table { max-height: 340px; overflow-y: auto; border: 1px solid #eee; border-radius: 6px; margin-top: 0.5rem; }
-.region-group { border-bottom: 1px solid #f0f0f0; }
-.region-name { background: #f7f7f7; padding: 0.3rem 0.6rem; font-weight: 600; font-size: 0.78rem; color: #555; position: sticky; top: 0; }
-.airport-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.6rem; font-size: 0.85rem; border-top: 1px solid #f5f5f5; }
-.airport-row .name { flex: 1; }
-.airport-row .code { font-family: monospace; color: #888; }
-.airport-row label.pick { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.78rem; color: #444; margin: 0; white-space: nowrap; }
-.airport-row input[type=checkbox] { width: auto; margin: 0; }
-#airport-filter { margin-top: 0.5rem; }
+.autocomplete { position: relative; }
+.suggestions {
+  position: absolute; z-index: 10; top: 100%; left: 0; right: 0; margin-top: 2px;
+  background: #fff; border: 1px solid #ddd; border-radius: 6px; max-height: 280px;
+  overflow-y: auto; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+}
+.suggestion { padding: 0.5rem 0.7rem; font-size: 0.88rem; cursor: pointer; }
+.suggestion:hover { background: #f2f6fe; }
+.suggestion.muted { cursor: default; }
+.suggestion.muted:hover { background: none; }
+.suggestion .code { font-family: monospace; color: #888; }
