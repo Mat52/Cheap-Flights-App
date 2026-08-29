@@ -1,13 +1,16 @@
 import asyncio
 import os
+from datetime import datetime
 
 from dotenv import load_dotenv
 from flask import Flask, render_template, request
 from playwright.async_api import async_playwright
 
 import database
+from core.airports import load_airports
 from core.search import run_search, znajdz_polaczenia_dwustronne
 from core.telegram import wyslij_telegram
+from core.travel_intent import resolve_destinations
 from core.utils import generate_dates
 
 load_dotenv()
@@ -46,9 +49,9 @@ def parse_groups(raw: str):
 
 DEFAULTS = {
     "origins": "KRK, KTW",
-    "destinations": "BCN, GRO",
+    "travel_query": "",
     "grupy_baz": "KRK, KTW",
-    "grupy_destynacji": "BCN, GRO",
+    "grupy_destynacji": "",
     "departure_start": "",
     "departure_end": "",
     "return_start": "",
@@ -59,6 +62,24 @@ DEFAULTS = {
     "notify_telegram": True,
     "use_cache": True,
 }
+
+
+def describe_intent(intent, query):
+    """Human-readable (Polish) summary of what the AI destination search
+    understood from `query`, shown back to the user next to the results so
+    a wrong/partial interpretation is obvious rather than silent."""
+    if not query.strip():
+        return "🌍 Brak zapytania — przeszukano wszystkie lotniska z listy."
+    if not intent["understood"]:
+        return "🤔 Nie rozpoznano preferencji w zapytaniu — przeszukano wszystkie lotniska z listy."
+    parts = []
+    if intent["countries"]:
+        parts.append("kraje: " + ", ".join(intent["countries"]))
+    if intent["min_avg_temp_c"] is not None:
+        parts.append(f"min. śr. temperatura: {intent['min_avg_temp_c']}°C")
+    if not parts:
+        return "🌍 Nie rozpoznano konkretnej preferencji — przeszukano wszystkie lotniska z listy."
+    return "✅ Zrozumiano: " + " | ".join(parts)
 
 
 def format_offer_message(offers):
@@ -80,18 +101,19 @@ def index():
     offers = None
     error = None
     telegram_sent = False
+    intent_summary = None
 
     if request.method == "GET":
         # lets a link (e.g. "no saved results — search live instead" on
         # /saved) pre-fill the airport fields without auto-submitting a search
-        for key in ("origins", "destinations", "grupy_baz", "grupy_destynacji"):
+        for key in ("origins", "travel_query", "grupy_baz", "grupy_destynacji"):
             if request.args.get(key):
                 form[key] = request.args[key]
 
     if request.method == "POST":
         form.update({
             "origins": request.form.get("origins", ""),
-            "destinations": request.form.get("destinations", ""),
+            "travel_query": request.form.get("travel_query", ""),
             "grupy_baz": request.form.get("grupy_baz", ""),
             "grupy_destynacji": request.form.get("grupy_destynacji", ""),
             "departure_start": request.form.get("departure_start", ""),
@@ -107,15 +129,25 @@ def index():
 
         try:
             origins = parse_codes(form["origins"])
-            destinations = parse_codes(form["destinations"])
             if not origins:
                 raise ValueError("Podaj przynajmniej jedno lotnisko wylotu.")
-            if not destinations:
-                raise ValueError("Podaj przynajmniej jedno lotnisko docelowe.")
             if not form["departure_start"] or not form["departure_end"]:
                 raise ValueError("Podaj zakres dat wylotu.")
             if not form["return_start"] or not form["return_end"]:
                 raise ValueError("Podaj zakres dat powrotu.")
+
+            departure_month = datetime.strptime(form["departure_start"], "%Y-%m-%d").month
+            try:
+                destinations, intent = resolve_destinations(form["travel_query"], load_airports(), departure_month)
+            except RuntimeError as e:
+                # Claude call itself failed (bad/missing key, rate limit, ...)
+                raise ValueError(str(e))
+            intent_summary = describe_intent(intent, form["travel_query"])
+            if not destinations:
+                raise ValueError(
+                    f"Brak lotnisk pasujących do zapytania „{form['travel_query']}”. "
+                    "Spróbuj innego kraju/regionu albo zostaw pole puste, żeby przeszukać wszystko."
+                )
 
             params = {
                 "origins": origins,
@@ -190,6 +222,7 @@ def index():
         error=error,
         telegram_sent=telegram_sent,
         telegram_configured=bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+        intent_summary=intent_summary,
     )
 
 
