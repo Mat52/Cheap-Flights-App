@@ -12,7 +12,7 @@ import asyncio
 from datetime import datetime
 
 import database
-from core.googleflights import search_flight_google
+from core.googleflights import search_flight_google, warm_up_cookies
 
 
 def te_same_regiony(a, b, grupy):
@@ -144,6 +144,10 @@ async def run_search(launch_browser, params, on_result=None, concurrency=5, cach
             # Bounds every Playwright wait that doesn't specify its own
             # timeout, for every page created from this context.
             context.set_default_timeout(8000)
+            # Sequential, before any concurrent page exists — see
+            # warm_up_cookies()'s docstring for why this isn't optional at
+            # concurrency above ~5.
+            await warm_up_cookies(context)
             scraped = await scrape_legs(context, to_scrape, concurrency, on_progress=on_progress)
             for flight in scraped:
                 if flight:

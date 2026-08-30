@@ -1,5 +1,32 @@
-from playwright.async_api import Page
+from playwright.async_api import BrowserContext, Page
 import re
+
+
+async def warm_up_cookies(context: BrowserContext):
+    """Accept Google's cookie-consent dialog once, sequentially, on a
+    scratch page, before any concurrent scraping starts.
+
+    This isn't defensive polish — measured directly: without it, raising
+    scrape concurrency past ~5 made almost every leg fail (29/30 at
+    concurrency 15), all logging "waiting for consent.google.com/save
+    navigation to finish". Every page in a shared BrowserContext hitting
+    Google Flights for the first time races on that same consent-redirect
+    dance at once, and it falls apart. Doing it once, sequentially, before
+    any concurrent page exists means the consent cookie is already sitting
+    in the context's cookie jar by the time they navigate, so none of them
+    ever see the dialog or the redirect at all.
+    """
+    page = await context.new_page()
+    try:
+        await page.goto("https://www.google.com/travel/flights?hl=pl", timeout=15000)
+        try:
+            await page.wait_for_selector("button:has-text('Zaakceptuj wszystko')", timeout=5000)
+            await page.click("button:has-text('Zaakceptuj wszystko')", timeout=2000)
+            print("✅ Zaakceptowano cookies (warm-up)")
+        except Exception:
+            print("ℹ️ Brak popupu cookies (warm-up)")
+    finally:
+        await page.close()
 
 
 async def search_flight_google(page: Page, origin, destination, date_out):
@@ -8,17 +35,17 @@ async def search_flight_google(page: Page, origin, destination, date_out):
         print(f"🌐 Otwieram: {url}")
         await page.goto(url, timeout=15000)
 
-        # Defensive on every page, not just the first: Google's consent
-        # cookie lives in the browser context, so once any page in this
-        # context has accepted it the dialog won't reappear for the rest —
-        # but concurrent pages racing on their very first navigation may
-        # each still see it once, so every page tries independently.
+        # warm_up_cookies() already accepted this once, sequentially, before
+        # any concurrent page existed — this is just a cheap fallback in
+        # case consent state was somehow lost mid-search. Short timeout on
+        # purpose: at concurrency, this runs on every leg, and the button
+        # normally isn't there to find.
         try:
-            await page.wait_for_selector("button:has-text('Zaakceptuj wszystko')", timeout=1000)
+            await page.wait_for_selector("button:has-text('Zaakceptuj wszystko')", timeout=300)
             await page.click("button:has-text('Zaakceptuj wszystko')", timeout=1000)
             print("✅ Zaakceptowano cookies")
         except Exception:
-            print("ℹ️ Brak popupu cookies")
+            pass
 
         await page.wait_for_selector("div[role='tab']", timeout=1500)
         await page.locator("div[role='tab']").filter(has_text="Najtaniej").click(timeout=1000)
