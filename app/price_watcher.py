@@ -1,16 +1,24 @@
 """Standalone price-watch daemon — a second, independent app from the
-Flask search UI. Runs forever: every WATCHER_INTERVAL_SECONDS (default 3
-minutes), it checks a small, hand-picked list of specific flights
+Flask search UI. Checks a small, hand-picked list of specific flights
 (app/watchlist.json) and sends a Telegram message to your phone the moment
 any of their prices change (up or down) from what was last seen.
 
-It reuses this repo's existing scraper (core.googleflights), Telegram
-sender (core.telegram) and Postgres layer (database) as plain libraries —
-it does not touch or depend on webapp.py, and can run with or without the
-Flask app up. "Last seen price" is just the most recent row already in the
-shared `flights` table for that exact leg (database.get_last_price), so no
-separate state file is needed: every check both compares against and then
-extends the same history the web UI's searches already build.
+Two ways to run it, two "last seen price" backends:
+
+- Locally, forever (`python price_watcher.py`): loops every
+  WATCHER_INTERVAL_SECONDS (default 3 min), reusing the shared Postgres
+  `flights` table as its price history (PostgresPriceStore) — the same
+  history the web UI's own searches build, no separate state needed. See
+  the README's "Price Watcher" section for running this as a real 24/7
+  background service via launchd.
+- One-shot, for GitHub Actions (`python price_watcher.py --once`): does a
+  single check and exits, using a small JSON file (JsonFilePriceStore,
+  price_history.json) instead of Postgres — GitHub's runners can't reach
+  your local database. Keys are hashed (origin+destination+date), not
+  plaintext, specifically because this file is meant to be committed back
+  to the repo by the workflow after each run: on a public repo, a
+  plaintext key would publish your actual travel dates in the commit
+  history. See .github/workflows/price_watcher.yml and the README.
 
 Each watchlist entry needs origin/destination/date; "label" and "airline"
 are optional. Without "airline", a check is "whatever's cheapest overall"
@@ -22,20 +30,17 @@ no connections — see search_flight_google_for_airline()'s docstring for
 why: a connecting itinerary on a different carrier can undercut a budget
 airline's own direct flight and still show up first as "cheapest overall".
 
-Usage:
-    venv/bin/python price_watcher.py
-Runs in the foreground until killed — see the README's "Price Watcher"
-section for running it as a real 24/7 background service via launchd.
-
 ⚠️ This hits Google Flights for the exact same handful of queries on a
 fixed schedule, forever — a much more bot-like traffic pattern than the
 one-off searches the web UI makes, and a real ban-risk trade-off for
-however "responsive" you want WATCHER_INTERVAL_SECONDS to be. There's no
-special evasion here, just a small random jitter so the interval isn't
-perfectly periodic — see the env var docs below before cranking the
-interval down further.
+however "responsive" you want the check interval to be. There's no
+special evasion here (beyond the jitter on the local-loop path) — see the
+env var docs below before cranking WATCHER_INTERVAL_SECONDS down further,
+and note GitHub Actions itself enforces a 5-minute floor on schedules
+regardless (see the README).
 """
 import asyncio
+import hashlib
 import json
 import os
 import random
@@ -55,19 +60,21 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-# How often to re-check every watched flight. Default matches what was
-# asked for (3 min) — see the ban-risk warning in the module docstring
-# before lowering it further; raising it is always safe.
+# How often the *local, looping* mode re-checks every watched flight —
+# irrelevant to --once, which is invoked externally by GitHub's own cron.
+# See the ban-risk warning in the module docstring before lowering it;
+# raising it is always safe.
 WATCHER_INTERVAL_SECONDS = int(os.getenv("WATCHER_INTERVAL_SECONDS", "180"))
-# +/- this many seconds of random jitter around the interval, so the
-# schedule isn't perfectly periodic (a small, honest mitigation — not a
-# guarantee against bot detection).
+# +/- this many seconds of random jitter around the interval (local mode
+# only), so the schedule isn't perfectly periodic.
 WATCHER_JITTER_SECONDS = int(os.getenv("WATCHER_JITTER_SECONDS", "20"))
 # Pause between individual watched flights within one check cycle — keeps
 # a watchlist of a few flights from all hitting Google in the same instant.
 WATCHER_PER_FLIGHT_DELAY_SECONDS = 2
 
-WATCHLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist.json")
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+WATCHLIST_PATH = os.path.join(APP_DIR, "watchlist.json")
+PRICE_HISTORY_PATH = os.path.join(APP_DIR, "price_history.json")
 
 _shutdown = False
 
@@ -101,6 +108,67 @@ def describe(entry):
     return entry.get("label") or f"{entry['origin']} → {entry['destination']}"
 
 
+class PostgresPriceStore:
+    """Price history backed by the shared `flights` table — used by the
+    local, looping mode. get_last_price/save_price are sync (psycopg2);
+    check_once() runs both through asyncio.to_thread."""
+
+    def get_last_price(self, origin, destination, date):
+        return database.get_last_price(origin, destination, date)
+
+    def save_price(self, result):
+        database.save_flight_result(result)
+
+    def flush(self):
+        pass  # nothing to do — every write already went straight to Postgres
+
+
+class JsonFilePriceStore:
+    """Price history as a small local JSON file — used by --once, for
+    environments with no reachable Postgres (GitHub Actions runners).
+    Keys are a short hash of (origin, destination, date), not the
+    plaintext route: this file is meant to be committed back to the repo
+    after each run, and on a public repo a plaintext key would publish
+    your actual travel dates in the commit history. flush() must be
+    called once after all checks in a run to persist changes to disk.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self._data = self._load()
+        self._dirty = False
+
+    def _load(self):
+        if not os.path.exists(self.path):
+            return {}
+        with open(self.path, encoding="utf-8") as f:
+            return json.load(f)
+
+    @staticmethod
+    def _key(origin, destination, date):
+        raw = f"{origin}|{destination}|{date}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    def get_last_price(self, origin, destination, date):
+        entry = self._data.get(self._key(origin, destination, date))
+        return entry["price"] if entry else None
+
+    def save_price(self, result):
+        key = self._key(result["origin"], result["destination"], result["date"])
+        self._data[key] = {
+            "price": result["price"],
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        self._dirty = True
+
+    def flush(self):
+        if not self._dirty:
+            return
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(self._data, f, indent=1, sort_keys=True)
+        self._dirty = False
+
+
 def notify_price_change(entry, previous_price, new_result):
     direction = "📈 wzrosła" if new_result["price"] > previous_price else "📉 spadła"
     diff = round(new_result["price"] - previous_price, 2)
@@ -120,7 +188,7 @@ def notify_price_change(entry, previous_price, new_result):
         )
 
 
-async def check_once(watchlist):
+async def check_once(watchlist, price_store):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
@@ -152,9 +220,9 @@ async def check_once(watchlist):
                     continue
 
                 previous_price = await asyncio.to_thread(
-                    database.get_last_price, entry["origin"], entry["destination"], entry["date"]
+                    price_store.get_last_price, entry["origin"], entry["destination"], entry["date"]
                 )
-                await asyncio.to_thread(database.save_flight_result, result)
+                await asyncio.to_thread(price_store.save_price, result)
 
                 if previous_price is None:
                     _log(f"👀 Pierwszy odczyt: {describe(entry)} = {result['price']} PLN")
@@ -166,6 +234,24 @@ async def check_once(watchlist):
                 await asyncio.sleep(WATCHER_PER_FLIGHT_DELAY_SECONDS)
         finally:
             await browser.close()
+            price_store.flush()
+
+
+def run_once():
+    """Single check-and-exit, for an external scheduler (GitHub Actions).
+    Uses JsonFilePriceStore, not Postgres — see the module docstring."""
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+        _log("⚠️ TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID nie są skonfigurowane — zmiany cen będą tylko logowane, nie wysyłane na telefon.")
+
+    watchlist = load_watchlist()
+    if not watchlist:
+        _log("⚠️ Watchlist jest pusta — nic do sprawdzenia.")
+        sys.exit(1)
+
+    _log(f"🔎 Jednorazowe sprawdzenie {len(watchlist)} lotów (--once): " + ", ".join(describe(e) for e in watchlist))
+    price_store = JsonFilePriceStore(PRICE_HISTORY_PATH)
+    asyncio.run(check_once(watchlist, price_store))
+    _log("✅ Gotowe.")
 
 
 def main():
@@ -186,11 +272,12 @@ def main():
         sys.exit(1)
 
     _log(f"🚀 Start — obserwuję {len(watchlist)} lotów co ~{WATCHER_INTERVAL_SECONDS}s: " + ", ".join(describe(e) for e in watchlist))
+    price_store = PostgresPriceStore()
 
     while not _shutdown:
         cycle_start = time.time()
         try:
-            asyncio.run(check_once(watchlist))
+            asyncio.run(check_once(watchlist, price_store))
         except Exception as e:
             _log(f"❌ Błąd w cyklu sprawdzania: {e}")
 
@@ -210,4 +297,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--once" in sys.argv:
+        run_once()
+    else:
+        main()

@@ -14,7 +14,7 @@ A small web app for hunting cheap round-trip flights on **Google Flights**. Type
 - Persists every scraped flight to Postgres (best-effort — search still works if the DB is unreachable)
 - Sends a Telegram alert for offers under your price threshold, if configured
 - Everything is entered live on the page — no more editing Python config files per trip
-- **`price_watcher.py`** — a second, standalone 24/7 app: pick a handful of specific flights, it checks each one every few minutes and Telegrams you the moment a price changes (see "Price Watcher" below)
+- **`price_watcher.py`** — a second, standalone 24/7 app: pick a handful of specific flights, it checks each one every few minutes and Telegrams you the moment a price changes. Runs locally (macOS LaunchAgent) or on GitHub Actions, so it keeps checking even with your own machine off (see "Price Watcher" below)
 
 ---
 
@@ -125,6 +125,22 @@ Logs land in `~/Library/Logs/cheap-flights-price-watcher/` when run as a service
 - `WATCHER_INTERVAL_SECONDS` — how often to re-check every watched flight (default `180` = 3 min).
 - `WATCHER_JITTER_SECONDS` — random +/- seconds around that interval (default `20`), so the schedule isn't perfectly periodic.
 
+### Running it on GitHub Actions instead (survives your Mac being off)
+
+The LaunchAgent above only runs while your Mac is on, awake, and you're logged in. `.github/workflows/price_watcher.yml` runs the watcher from GitHub's own infrastructure instead — genuinely always-on, independent of your machine — trading the exact 3-minute cadence for one GitHub can actually deliver.
+
+**Why not just point GitHub Actions at `WATCHER_INTERVAL_SECONDS=180`**: it can't. GitHub Actions enforces a hard 5-minute floor on `schedule` cron triggers, and even that isn't guaranteed — scheduled runs are commonly delayed 5-30+ minutes during high load, especially right at :00/:30 past the hour. There is no way to get real 3-minute checks out of it. The workflow here uses `python price_watcher.py --once` (a single check-and-exit, not the looping mode) on a 15-minute schedule, offset from the busy times.
+
+It also can't reach your local Postgres — GitHub's runners have no route to `localhost` on your Mac. So `--once` uses a small JSON file (`app/price_history.json`) instead of Postgres for "last seen price", and the workflow commits that file back to the repo after every run so the history persists between runs. **Its keys are a hash of origin+destination+date, not the plaintext route** — this repo is public, so a plaintext key would publish your actual travel dates in the commit history forever, even if later "deleted" (public history can be cached/forked). Hashing means the committed file doesn't read as a legible itinerary.
+
+**Setup** (GitHub web UI, Settings → Secrets and variables → Actions → New repository secret):
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — same values as your `.env`.
+- `WATCHLIST_JSON` — the full contents of your `app/watchlist.json`, pasted as one secret. It's written to `watchlist.json` fresh at the start of every run and never committed — same privacy reasoning as the hashed history file, just for the input side instead of the output side.
+
+Then either wait for the schedule, or trigger a run immediately from the repo's **Actions** tab → "Price Watcher" → **Run workflow**.
+
+**Running both at once**: nothing stops you from running the local LaunchAgent *and* the GitHub Actions workflow simultaneously — they use separate state (Postgres vs. `price_history.json`) and won't conflict, though you may get a notification from each shortly after the same real price change.
+
 ### ⚠️ Read before setting this up
 - **This is a materially different traffic pattern than the search UI**: the same exact query, on a fixed schedule, forever — a much more bot-like signature than one-off searches, and a real risk of Google eventually blocking the IP it runs from. There's no evasion trick here, just the jitter above. Raising `WATCHER_INTERVAL_SECONDS` is always safe; lowering it below a few minutes trades responsiveness for risk.
 - **A LaunchAgent isn't true 24/7**: it only runs while you're logged in and the Mac isn't asleep. For genuine round-the-clock coverage, either stop the Mac from sleeping (Ustawienia > Bateria/Energia) or eventually move this one script to a small always-on server/VPS — nothing about it depends on the rest of this repo running anywhere in particular.
@@ -136,6 +152,8 @@ Logs land in `~/Library/Logs/cheap-flights-price-watcher/` when run as a service
 ```
 Cheap-Flights-App/
 │
+├── .github/workflows/
+│   └── price_watcher.yml       # runs price_watcher.py --once on a schedule (see "Price Watcher")
 ├── app/
 │   ├── webapp.py               # Flask app: search form + results
 │   ├── templates/index.html    # the search page
@@ -154,7 +172,8 @@ Cheap-Flights-App/
 │   │   └── climate_normals.json # precomputed avg monthly temp per airport (see scripts/)
 │   ├── database.py             # Postgres persistence (init_db / save_flight_result)
 │   ├── price_watcher.py        # second, standalone app: 24/7 price-change alerts to Telegram
-│   └── watchlist.example.json  # copy to watchlist.json (gitignored) and add your own flights
+│   ├── watchlist.example.json  # copy to watchlist.json (gitignored) and add your own flights
+│   └── price_history.json      # --once mode's state (hashed keys) — committed by the GH Actions workflow
 │
 ├── scripts/
 │   ├── fetch_climate_normals.py # one-time/occasional: (re)build climate_normals.json from Open-Meteo
