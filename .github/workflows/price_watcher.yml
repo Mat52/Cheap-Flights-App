@@ -1,0 +1,81 @@
+name: Price Watcher
+
+# GitHub Actions enforces a 5-minute floor on cron schedules and doesn't
+# guarantee timing even at that — expect delays, especially around :00/:30
+# when everyone's schedules fire at once (see the README's "Price Watcher"
+# section). 7/22/37/52 checks every 15 minutes, offset from the busy times.
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch: {}  # lets you trigger a check manually from the Actions tab
+
+# Needed to commit price_history.json back to the repo after each run.
+permissions:
+  contents: write
+
+# Never run two checks at once (e.g. a manual trigger overlapping a
+# scheduled one) — they'd both read/write price_history.json and race.
+concurrency:
+  group: price-watcher
+  cancel-in-progress: false
+
+jobs:
+  check-prices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache Playwright browser
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Playwright Chromium
+        # Skips the ~1-2 min browser download on cache hits — the cache
+        # step above only caches the binary, not the OS packages it needs,
+        # so --with-deps still has to run every time (fast when cached).
+        run: python -m playwright install --with-deps chromium
+
+      - name: Write watchlist from secret
+        working-directory: app
+        env:
+          WATCHLIST_JSON: ${{ secrets.WATCHLIST_JSON }}
+        run: |
+          if [ -z "$WATCHLIST_JSON" ]; then
+            echo "::error::WATCHLIST_JSON secret is not set — add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          printf '%s' "$WATCHLIST_JSON" > watchlist.json
+          python -c "import json; json.load(open('watchlist.json'))"  # fail fast on invalid JSON
+
+      - name: Check prices
+        working-directory: app
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python price_watcher.py --once
+
+      - name: Commit updated price history
+        working-directory: app
+        run: |
+          git config user.name "price-watcher-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add price_history.json
+          git diff --cached --quiet && echo "No price changes to commit." && exit 0
+          git commit -m "chore: update price history [skip ci]"
+          git push

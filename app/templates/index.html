@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <title>✈️ Cheap Flights</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>✈️ Cheap Flights</h1>
+  <div class="nav">
+    <a href="/" class="active">🌐 Szukaj na żywo</a>
+    <a href="/saved">💾 Przeglądaj zapisane oferty</a>
+  </div>
+
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% if telegram_sent %}<div class="ok">📨 Wysłano powiadomienie na Telegram.</div>{% endif %}
+  {% if intent_summary %}<div class="ok">{{ intent_summary }}</div>{% endif %}
+  {% if date_intent_summary %}<div class="ok">{{ date_intent_summary }}</div>{% endif %}
+  {% if not telegram_configured %}<div class="muted">ℹ️ Telegram nie skonfigurowany (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) — powiadomienia będą pomijane.</div>{% endif %}
+
+  <form method="post" id="search-form">
+    <fieldset>
+      <legend>Skąd lecisz?</legend>
+
+      <label for="airport-search">Szukaj lotniska (miasto, kraj lub kod)</label>
+      <div class="autocomplete">
+        <input type="text" id="airport-search" placeholder="np. Kraków, Hiszpania, KRK" autocomplete="off">
+        <div id="airport-suggestions" class="suggestions" hidden></div>
+      </div>
+
+      <div id="origins-chips" class="chips" style="margin-top:0.6rem;"></div>
+      <input type="text" id="origins" name="origins" value="{{ form.origins }}" class="codes-field" placeholder="KRK, KTW">
+      <div class="hint">Znasz kod IATA lotniska spoza listy? Możesz go dopisać ręcznie w polu powyżej.</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Dokąd chcesz polecieć?</legend>
+      <label class="pick" style="margin-top:0.75rem;"><input type="checkbox" id="anywhere-destinations" name="anywhere_destinations" {% if form.anywhere_destinations %}checked{% endif %} style="width:auto;">🌍 Dokądkolwiek — przeszukaj wszystkie lotniska z listy (bez pytania AI, zawsze działa)</label>
+      <label for="travel_query">Albo opisz swoimi słowami, gdzie chcesz polecieć — zapytanie interpretuje AI</label>
+      <textarea id="travel_query" name="travel_query" placeholder='np. "Hiszpania", "gdziekolwiek gdzie jest cieplej niż 20°C", "Włochy albo Grecja"'>{{ form.travel_query }}</textarea>
+      <div class="hint">Zaznaczenie „Dokądkolwiek” ignoruje pole poniżej i nic nie pyta AI — zawsze zadziała. Zostawienie pola poniżej całkiem pustego robi to samo. Ale wpisanie w nim czegoś w stylu „gdziekolwiek” zamiast zostawienia go pustym trafia do AI jak każde inne zapytanie i może zostać źle zrozumiane — stąd osobny checkbox. AI dopasowuje kraje z listy lotnisk powyżej, a preferencje pogodowe — do historycznych danych klimatycznych dla wybranego miesiąca wylotu.</div>
+      <div class="warn">⚠️ Szerokie zapytanie (albo „Dokądkolwiek”) w połączeniu z wieloma datami wciąż oznacza więcej czekania — zawęź daty do 1–2 dni dla szybszego wyniku.</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Kiedy i za ile</legend>
+      <label for="date_query">Kiedy chcesz polecieć? (opcjonalnie — opisz zamiast wybierać dokładne daty)</label>
+      <input type="text" id="date_query" name="date_query" value="{{ form.date_query }}"
+             placeholder='np. "weekend we wrześniu", "długi weekend w październiku", "od 10 do 20 września", "tydzień w listopadzie"'>
+      <div class="hint">Jeśli wypełnisz to pole, dokładne daty poniżej są ignorowane — AI ustali konkretne dni wylotu/powrotu (i długość pobytu, jeśli to sensowne, np. dla weekendu).</div>
+
+      <div class="row" style="margin-top: 0.8rem;">
+        <div>
+          <label for="departure_start">Wylot od</label>
+          <input type="date" id="departure_start" name="departure_start" value="{{ form.departure_start }}">
+        </div>
+        <div>
+          <label for="departure_end">Wylot do</label>
+          <input type="date" id="departure_end" name="departure_end" value="{{ form.departure_end }}">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="return_start">Powrót od</label>
+          <input type="date" id="return_start" name="return_start" value="{{ form.return_start }}">
+        </div>
+        <div>
+          <label for="return_end">Powrót do</label>
+          <input type="date" id="return_end" name="return_end" value="{{ form.return_end }}">
+        </div>
+      </div>
+      <label for="price_threshold">💰 Twój budżet (PLN, tam i z powrotem razem) — okazje poniżej są podświetlane</label>
+      <input type="number" id="price_threshold" name="price_threshold" value="{{ form.price_threshold }}" min="0" step="1">
+    </fieldset>
+
+    <details class="advanced">
+      <summary>⚙️ Więcej opcji (opcjonalnie)</summary>
+      <div class="advanced-body">
+        <div class="row">
+          <div>
+            <label for="min_days">Min. dni pobytu</label>
+            <input type="number" id="min_days" name="min_days" value="{{ form.min_days }}" min="0">
+          </div>
+          <div>
+            <label for="max_days">Maks. dni pobytu</label>
+            <input type="number" id="max_days" name="max_days" value="{{ form.max_days }}" min="0">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="grupy_baz">Lotniska bazowe traktowane jako zamienne (jedna grupa na linię)</label>
+            <textarea id="grupy_baz" name="grupy_baz" placeholder="KRK, KTW">{{ form.grupy_baz }}</textarea>
+            <div class="hint">Pozwala wylecieć z jednego lotniska, a wrócić do innego z tej samej grupy.</div>
+          </div>
+          <div>
+            <label for="grupy_destynacji">Lotniska docelowe traktowane jako zamienne (jedna grupa na linię)</label>
+            <textarea id="grupy_destynacji" name="grupy_destynacji" placeholder="BCN, GRO">{{ form.grupy_destynacji }}</textarea>
+            <div class="hint">Np. dolecieć do BCN, a wylecieć z powrotem z GRO — działa też na lotniska dobrane automatycznie przez AI.</div>
+          </div>
+        </div>
+        <label><input type="checkbox" name="notify_telegram" {% if form.notify_telegram %}checked{% endif %} style="width:auto;display:inline;margin-right:0.4rem;">Wyślij powiadomienie Telegram dla znalezionych okazji</label>
+        <label><input type="checkbox" name="use_cache" {% if form.use_cache %}checked{% endif %} style="width:auto;display:inline;margin-right:0.4rem;">Użyj cache — pomiń odcinki zeskrobane niedawno zamiast szukać ich ponownie</label>
+      </div>
+    </details>
+
+    <button type="submit">🔍 Szukaj</button>
+  </form>
+
+  {% if results is not none %}
+    <p class="muted">💾 Każdy znaleziony lot zapisywany jest do bazy — <a href="/saved">przeglądaj wszystkie zapisane dotąd oferty</a> bez ponownego szukania na żywo. Odcinki zeskrobane niedawno (patrz "Użyj cache" powyżej) są też brane wprost z bazy zamiast ponownie odpytywać Google Flights.</p>
+    <h2>📋 Znalezione połączenia ({{ results|length }})</h2>
+    {% if results %}
+      <table>
+        <tr><th>Skąd</th><th>Dokąd</th><th>Data</th><th>Linia</th><th>Wylot</th><th>Przylot</th><th>Cena</th></tr>
+        {% for r in results %}
+          <tr>
+            <td>{{ r.origin }}</td><td>{{ r.destination }}</td><td>{{ r.date }}</td>
+            <td>{{ r.Airline }}</td><td>{{ r.departure }}</td><td>{{ r.arrival }}</td>
+            <td>{{ r.price }} PLN</td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="muted">Brak wyników dla podanych parametrów.</p>
+    {% endif %}
+
+    <h2>💰 Okazje tam i z powrotem ({{ offers|length }})</h2>
+    {% if offers %}
+      <table>
+        <tr><th>Tam</th><th>Powrót</th><th>Pobyt</th><th>Suma</th></tr>
+        {% for o in offers %}
+          <tr {% if price_threshold is not none and o.cena < price_threshold %}class="good"{% endif %}>
+            <td>{{ o.tam.origin }}→{{ o.tam.destination }} {{ o.tam.date }} ({{ o.tam.Airline }}, {{ o.tam.price }} PLN)</td>
+            <td>{{ o.powrot.origin }}→{{ o.powrot.destination }} {{ o.powrot.date }} ({{ o.powrot.Airline }}, {{ o.powrot.price }} PLN)</td>
+            <td>{{ o.pobyt }} dni</td>
+            <td><strong>{{ o.cena }} PLN</strong></td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="muted">Nie znaleziono pasujących połączeń tam i z powrotem.</p>
+    {% endif %}
+  {% endif %}
+
+  <script>
+    // Origin-only airport picker: a search bar with autocomplete suggestions
+    // (no permanently-visible list), kept in sync with the plain-text
+    // #origins field (which is what actually gets submitted — typing an
+    // IATA code by hand works too). Destinations are no longer picked here;
+    // they come from the free-text "Dokąd chcesz polecieć?" query,
+    // interpreted server-side.
+    var originsInput = document.getElementById('origins');
+    var originsChips = document.getElementById('origins-chips');
+    var searchInput = document.getElementById('airport-search');
+    var suggestionsBox = document.getElementById('airport-suggestions');
+
+    var airports = [];
+    var MAX_SUGGESTIONS = 8;
+
+    function parseCodes(raw) {
+      return raw.split(',').map(function (s) { return s.trim().toUpperCase(); }).filter(Boolean);
+    }
+
+    function renderChips() {
+      var codes = parseCodes(originsInput.value);
+      originsChips.innerHTML = '';
+      codes.forEach(function (code) {
+        var chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = code;
+        var x = document.createElement('button');
+        x.type = 'button';
+        x.textContent = '×';
+        x.title = 'Usuń ' + code;
+        x.onclick = function () { setCode(code, false); };
+        chip.appendChild(x);
+        originsChips.appendChild(chip);
+      });
+    }
+
+    originsInput.addEventListener('input', renderChips);
+
+    function setCode(code, present) {
+      var codes = parseCodes(originsInput.value);
+      var idx = codes.indexOf(code);
+      if (present && idx === -1) codes.push(code);
+      if (!present && idx !== -1) codes.splice(idx, 1);
+      originsInput.value = codes.join(', ');
+      renderChips();
+    }
+
+    function searchKey(a) {
+      return (a.city + ' ' + (a.city_pl || '') + ' ' + a.name + ' ' + a.code + ' ' + a.country + ' ' + a.region).toLowerCase();
+    }
+
+    function renderSuggestions() {
+      var q = searchInput.value.trim().toLowerCase();
+      if (!q) { suggestionsBox.hidden = true; suggestionsBox.innerHTML = ''; return; }
+
+      var matches = airports.filter(function (a) { return searchKey(a).indexOf(q) !== -1; }).slice(0, MAX_SUGGESTIONS);
+      suggestionsBox.innerHTML = '';
+      if (!matches.length) {
+        var empty = document.createElement('div');
+        empty.className = 'suggestion muted';
+        empty.textContent = 'Brak lotnisk pasujących do „' + searchInput.value.trim() + '”';
+        suggestionsBox.appendChild(empty);
+      } else {
+        matches.forEach(function (a) {
+          var item = document.createElement('div');
+          item.className = 'suggestion';
+          var label = (a.city_pl ? a.city_pl + ' (' + a.city + ')' : a.city) + ' — ' + a.name;
+          item.innerHTML = label + ' <span class="code">' + a.code + '</span>';
+          item.addEventListener('mousedown', function (e) {
+            e.preventDefault(); // keep focus on the input, don't blur before click registers
+            setCode(a.code, true);
+            searchInput.value = '';
+            suggestionsBox.hidden = true;
+          });
+          suggestionsBox.appendChild(item);
+        });
+      }
+      suggestionsBox.hidden = false;
+    }
+
+    searchInput.addEventListener('input', renderSuggestions);
+    searchInput.addEventListener('focus', renderSuggestions);
+    searchInput.addEventListener('blur', function () { suggestionsBox.hidden = true; });
+    searchInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { suggestionsBox.hidden = true; searchInput.blur(); }
+    });
+
+    // "Dokądkolwiek" checkbox short-circuits the AI query entirely (see
+    // webapp.py) — grey out the text field while it's checked so it's
+    // obvious the field is being ignored, not silently overridden.
+    var anywhereCheckbox = document.getElementById('anywhere-destinations');
+    var travelQueryInput = document.getElementById('travel_query');
+    function syncAnywhereState() {
+      travelQueryInput.disabled = anywhereCheckbox.checked;
+    }
+    anywhereCheckbox.addEventListener('change', syncAnywhereState);
+    syncAnywhereState();
+
+    fetch('/static/airports.json')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        airports = data;
+        renderChips();
+      })
+      .catch(function (e) {
+        searchInput.placeholder = 'Nie udało się wczytać listy lotnisk — wpisz kod ręcznie poniżej';
+        console.error(e);
+      });
+  </script>
+</body>
+</html>

@@ -30,5 +30,7 @@ RUN python -m playwright install --with-deps
 # Nadanie uprawnień do skryptu startowego
 RUN chmod +x /app/entrypoint.sh
 
+EXPOSE 5000
+
 # Domyślny punkt wejścia
 ENTRYPOINT ["bash", "/app/entrypoint.sh"]

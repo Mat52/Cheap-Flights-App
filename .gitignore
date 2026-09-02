@@ -19,3 +19,10 @@ docker-volume-data/
 # System files
 .DS_Store
 Thumbs.db
+
+# Secrets - copy .env.example to .env and never commit it
+.env
+
+# Personal price-watcher config - copy app/watchlist.example.json to
+# app/watchlist.json and never commit it (it's your own flight picks)
+app/watchlist.json

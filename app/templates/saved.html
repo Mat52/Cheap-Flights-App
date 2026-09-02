@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <title>💾 Zapisane oferty — Cheap Flights</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>💾 Cheap Flights — zapisane oferty</h1>
+  <div class="nav">
+    <a href="/">🌐 Szukaj na żywo</a>
+    <a href="/saved" class="active">💾 Przeglądaj zapisane oferty</a>
+  </div>
+  <p class="muted">Przeszukuje loty już wcześniej znalezione i zapisane do bazy — bez odpytywania Google Flights, więc wynik pojawia się natychmiast. Jeśli czegoś tu nie ma, to znaczy że nikt jeszcze tego nie szukał na żywo.</p>
+
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <form method="get">
+    <fieldset>
+      <legend>Filtry</legend>
+      <div class="row">
+        <div>
+          <label for="origins">Lotniska wylotu (puste = wszystkie)</label>
+          <input type="text" id="origins" name="origins" value="{{ form.origins }}" class="codes-field" placeholder="KRK, KTW">
+        </div>
+        <div>
+          <label for="destinations">Lotniska docelowe (puste = wszystkie)</label>
+          <input type="text" id="destinations" name="destinations" value="{{ form.destinations }}" class="codes-field" placeholder="BCN, GRO">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="date_from">Data od</label>
+          <input type="date" id="date_from" name="date_from" value="{{ form.date_from }}">
+        </div>
+        <div>
+          <label for="date_to">Data do</label>
+          <input type="date" id="date_to" name="date_to" value="{{ form.date_to }}">
+        </div>
+        <div>
+          <label for="max_price">Maks. cena za lot (PLN)</label>
+          <input type="number" id="max_price" name="max_price" value="{{ form.max_price }}" min="0" step="1">
+        </div>
+      </div>
+      <div class="hint">Obie listy razem tworzą pulę lotnisk do sparowania — pokazuje loty w obie strony między nimi, więc nie trzeba osobno podawać kierunku wylot/powrót jak przy szukaniu na żywo.</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Parowanie w oferty tam-powrót (opcjonalnie)</legend>
+      <div class="row">
+        <div>
+          <label for="grupy_baz">Lotniska bazowe traktowane jako zamienne (jedna grupa na linię)</label>
+          <textarea id="grupy_baz" name="grupy_baz" placeholder="KRK, KTW">{{ form.grupy_baz }}</textarea>
+        </div>
+        <div>
+          <label for="grupy_destynacji">Lotniska docelowe traktowane jako zamienne (jedna grupa na linię)</label>
+          <textarea id="grupy_destynacji" name="grupy_destynacji" placeholder="BCN, GRO">{{ form.grupy_destynacji }}</textarea>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="min_days">Min. dni pobytu</label>
+          <input type="number" id="min_days" name="min_days" value="{{ form.min_days }}" min="0">
+        </div>
+        <div>
+          <label for="max_days">Maks. dni pobytu</label>
+          <input type="number" id="max_days" name="max_days" value="{{ form.max_days }}" min="0">
+        </div>
+      </div>
+    </fieldset>
+
+    <button type="submit">🔍 Przeszukaj zapisane</button>
+  </form>
+
+  {% if not error %}
+  <h2>📋 Zapisane loty ({{ results|length }})</h2>
+  {% if results %}
+    <table>
+      <tr><th>Skąd</th><th>Dokąd</th><th>Data</th><th>Linia</th><th>Wylot</th><th>Przylot</th><th>Cena</th></tr>
+      {% for r in results %}
+        <tr>
+          <td>{{ r.origin }}</td><td>{{ r.destination }}</td><td>{{ r.date }}</td>
+          <td>{{ r.Airline }}</td><td>{{ r.departure }}</td><td>{{ r.arrival }}</td>
+          <td>{{ r.price }} PLN</td>
+        </tr>
+      {% endfor %}
+    </table>
+
+    <h2>💰 Sparowane oferty tam-powrót ({{ offers|length }})</h2>
+    {% if offers %}
+      <table>
+        <tr><th>Tam</th><th>Powrót</th><th>Pobyt</th><th>Suma</th></tr>
+        {% for o in offers %}
+          <tr>
+            <td>{{ o.tam.origin }}→{{ o.tam.destination }} {{ o.tam.date }} ({{ o.tam.Airline }}, {{ o.tam.price }} PLN)</td>
+            <td>{{ o.powrot.origin }}→{{ o.powrot.destination }} {{ o.powrot.date }} ({{ o.powrot.Airline }}, {{ o.powrot.price }} PLN)</td>
+            <td>{{ o.pobyt }} dni</td>
+            <td><strong>{{ o.cena }} PLN</strong></td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="muted">Znaleziono loty, ale żadne dwa nie pasują na siebie jako tam-powrót w podanym oknie dni pobytu.</p>
+    {% endif %}
+  {% else %}
+    <p class="muted">Brak zapisanych lotów dla tych filtrów.</p>
+    <div class="warn">
+      🔍 Nie ma tego jeszcze w bazie — spróbuj wyszukać na żywo:
+      <a href="/?origins={{ form.origins | urlencode }}&grupy_baz={{ form.grupy_baz | urlencode }}">otwórz wyszukiwanie na żywo z tymi lotniskami wylotu →</a>
+      (dopisz cel podróży, dogranie dat i uruchomienie zajmie chwilę, bo to prawdziwe zapytanie do Google Flights).
+    </div>
+  {% endif %}
+  {% endif %}
+</body>
+</html>
