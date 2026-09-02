@@ -12,10 +12,20 @@ shared `flights` table for that exact leg (database.get_last_price), so no
 separate state file is needed: every check both compares against and then
 extends the same history the web UI's searches already build.
 
+Each watchlist entry needs origin/destination/date; "label" and "airline"
+are optional. Without "airline", a check is "whatever's cheapest overall"
+(any carrier, any number of stops) — the same thing the web UI's search
+does. With "airline" (e.g. "Ryanair"), it scans the full results list
+instead of just the top card and reports that airline's own price, and by
+default (direct_only, true unless set to false) only counts a flight with
+no connections — see search_flight_google_for_airline()'s docstring for
+why: a connecting itinerary on a different carrier can undercut a budget
+airline's own direct flight and still show up first as "cheapest overall".
+
 Usage:
     venv/bin/python price_watcher.py
-Runs in the foreground until killed — see docs/price-watcher.md (or the
-README) for running it as a real 24/7 background service via launchd.
+Runs in the foreground until killed — see the README's "Price Watcher"
+section for running it as a real 24/7 background service via launchd.
 
 ⚠️ This hits Google Flights for the exact same handful of queries on a
 fixed schedule, forever — a much more bot-like traffic pattern than the
@@ -38,7 +48,7 @@ from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
 import database
-from core.googleflights import search_flight_google, warm_up_cookies
+from core.googleflights import search_flight_google, search_flight_google_for_airline, warm_up_cookies
 from core.telegram import wyslij_telegram
 
 load_dotenv()
@@ -121,7 +131,18 @@ async def check_once(watchlist):
             for entry in watchlist:
                 page = await context.new_page()
                 try:
-                    result = await search_flight_google(page, entry["origin"], entry["destination"], entry["date"])
+                    if entry.get("airline"):
+                        # Specific-airline watch, e.g. a budget carrier's
+                        # own direct flight — not just whatever's cheapest
+                        # overall (which can be a connection on a different
+                        # airline entirely; see search_flight_google_for_airline's
+                        # docstring for a real example this was built for).
+                        result = await search_flight_google_for_airline(
+                            page, entry["origin"], entry["destination"], entry["date"],
+                            entry["airline"], direct_only=entry.get("direct_only", True),
+                        )
+                    else:
+                        result = await search_flight_google(page, entry["origin"], entry["destination"], entry["date"])
                 finally:
                     await page.close()
 

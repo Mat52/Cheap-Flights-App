@@ -99,10 +99,13 @@ Watchlist format — a plain JSON array, one entry per flight you want watched:
 ```json
 [
   {"origin": "KRK", "destination": "BCN", "date": "2026-09-15", "label": "Wakacje w Barcelonie"},
-  {"origin": "KTW", "destination": "OSL", "date": "2026-10-01"}
+  {"origin": "KTW", "destination": "OSL", "date": "2026-10-01"},
+  {"origin": "KRK", "destination": "RHO", "date": "2026-09-17", "airline": "Ryanair"}
 ]
 ```
 `label` is optional (defaults to `ORIGIN → DESTINATION`). `watchlist.json` is gitignored — it's your own picks, not committed.
+
+`airline` is also optional. Without it, a check tracks *whatever's cheapest overall* — any carrier, any number of stops, same as the web UI's search. With it, the watcher scans the full results list (not just the top card) for that airline's own price specifically, and — unless you add `"direct_only": false` to the entry — only counts a flight with no connections. This matters concretely: for one real route checked while building this, the "cheapest overall" fare was a connecting itinerary on a different airline entirely, undercutting the budget carrier's own direct flight further down the list — exactly the case `airline` + `direct_only` exists to avoid.
 
 Also set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` in `.env` (see Configuration above) — without them, price changes are only logged to the console, not sent to your phone.
 
@@ -170,6 +173,7 @@ Cheap-Flights-App/
 
 ## ⚠️ Known limitations
 - The scraper is tightly coupled to the **Polish-locale Google Flights UI** (button text, CSS classes) and short Playwright timeouts — a UI or locale change upstream can silently break it, and errors are logged as "no results found" rather than distinguished from real empty results.
+- `airline`-filtered watchlist checks (`search_flight_google_for_airline`) only look through the results Google has actually rendered on the page — they don't scroll or force-load more. If your airline's flight isn't among the first batch of results for a route, the check reports "no result" (logged, not silently treated as a price of zero/unavailable) rather than finding it further down.
 - A search runs synchronously in the request — the page waits for the whole scrape before showing results, with no progress indicator beyond a spinner. Legs are now scraped concurrently (`SCRAPE_CONCURRENCY`, default 5 at once) and a leg already scraped within `CACHE_MAX_AGE_MINUTES` is reused from Postgres instead of re-scraped, which cuts a lot of the wait for wide searches and for repeat/overlapping ones — but a wide first-time search (many airports/dates, or "🌍 Dokądkolwiek" against all 161 curated airports) can still take a while. Narrow the date range for wide searches.
 - Raising `SCRAPE_CONCURRENCY` too high risks Google rate-limiting or bot-detecting the scraper sooner than the current sequential-ish pace does — there's no backoff/retry on that yet, a blocked leg just comes back as "no results found" like any other scrape failure.
 - AI destination/date search needs Ollama running locally with `OLLAMA_MODEL` pulled — an empty query ("anywhere" / exact date pickers) needs neither and makes no model call at all.
