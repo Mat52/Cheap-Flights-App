@@ -107,6 +107,33 @@ def get_recent_flight(origin, destination, date, max_age_minutes=30):
     }
 
 
+def get_last_price(origin, destination, date):
+    """Return the most recently scraped price for this exact one-way leg,
+    with no freshness window (unlike get_recent_flight) — used by
+    price_watcher.py to detect whether a newly-scraped price differs from
+    the last one it saw, however long ago that was. None if this leg has
+    never been scraped before.
+    """
+    try:
+        conn = get_connection()
+    except Exception as e:
+        print(f"⚠️ Baza niedostępna, nie mogę porównać ceny dla {origin}->{destination} {date}: {e}")
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT price FROM flights
+               WHERE origin = %s AND destination = %s AND date = %s
+               ORDER BY scraped_at DESC
+               LIMIT 1""",
+            (origin, destination, date),
+        )
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
 def get_all_flights():
     conn = get_connection()
     try:

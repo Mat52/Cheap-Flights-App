@@ -14,6 +14,7 @@ A small web app for hunting cheap round-trip flights on **Google Flights**. Type
 - Persists every scraped flight to Postgres (best-effort — search still works if the DB is unreachable)
 - Sends a Telegram alert for offers under your price threshold, if configured
 - Everything is entered live on the page — no more editing Python config files per trip
+- **`price_watcher.py`** — a second, standalone 24/7 app: pick a handful of specific flights, it checks each one every few minutes and Telegrams you the moment a price changes (see "Price Watcher" below)
 
 ---
 
@@ -85,6 +86,49 @@ Docker Compose reads `.env` from the repo root automatically, so make sure it ex
 
 ---
 
+## 📱 Price Watcher — a second, always-on app
+
+`price_watcher.py` is a separate, standalone daemon from the Flask search UI — it doesn't need the web app running at all. Point it at a short, hand-picked list of specific flights and it checks each one every few minutes, forever, sending a Telegram message straight to your phone the moment a price changes (up or down).
+
+### Setup
+```bash
+cd app
+cp watchlist.example.json watchlist.json   # then edit it — see format below
+```
+Watchlist format — a plain JSON array, one entry per flight you want watched:
+```json
+[
+  {"origin": "KRK", "destination": "BCN", "date": "2026-09-15", "label": "Wakacje w Barcelonie"},
+  {"origin": "KTW", "destination": "OSL", "date": "2026-10-01"}
+]
+```
+`label` is optional (defaults to `ORIGIN → DESTINATION`). `watchlist.json` is gitignored — it's your own picks, not committed.
+
+Also set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` in `.env` (see Configuration above) — without them, price changes are only logged to the console, not sent to your phone.
+
+### Run it
+```bash
+# foreground, for testing:
+cd app && ../venv/bin/python price_watcher.py
+
+# as a real background service (macOS, starts on login, restarts on crash):
+scripts/install_price_watcher_service.sh
+# stop/remove it later:
+scripts/uninstall_price_watcher_service.sh
+```
+Logs land in `~/Library/Logs/cheap-flights-price-watcher/` when run as a service.
+
+### Configuration (`.env`)
+- `WATCHER_INTERVAL_SECONDS` — how often to re-check every watched flight (default `180` = 3 min).
+- `WATCHER_JITTER_SECONDS` — random +/- seconds around that interval (default `20`), so the schedule isn't perfectly periodic.
+
+### ⚠️ Read before setting this up
+- **This is a materially different traffic pattern than the search UI**: the same exact query, on a fixed schedule, forever — a much more bot-like signature than one-off searches, and a real risk of Google eventually blocking the IP it runs from. There's no evasion trick here, just the jitter above. Raising `WATCHER_INTERVAL_SECONDS` is always safe; lowering it below a few minutes trades responsiveness for risk.
+- **A LaunchAgent isn't true 24/7**: it only runs while you're logged in and the Mac isn't asleep. For genuine round-the-clock coverage, either stop the Mac from sleeping (Ustawienia > Bateria/Energia) or eventually move this one script to a small always-on server/VPS — nothing about it depends on the rest of this repo running anywhere in particular.
+- "Price changed" means *any* change, up or down — there's no threshold/direction filter yet.
+
+---
+
 ## 📂 Project Structure
 ```
 Cheap-Flights-App/
@@ -105,10 +149,14 @@ Cheap-Flights-App/
 │   ├── static/
 │   │   ├── airports.json       # curated airport list (code, country, region, lat/lon, ...)
 │   │   └── climate_normals.json # precomputed avg monthly temp per airport (see scripts/)
-│   └── database.py             # Postgres persistence (init_db / save_flight_result)
+│   ├── database.py             # Postgres persistence (init_db / save_flight_result)
+│   ├── price_watcher.py        # second, standalone app: 24/7 price-change alerts to Telegram
+│   └── watchlist.example.json  # copy to watchlist.json (gitignored) and add your own flights
 │
 ├── scripts/
-│   └── fetch_climate_normals.py # one-time/occasional: (re)build climate_normals.json from Open-Meteo
+│   ├── fetch_climate_normals.py # one-time/occasional: (re)build climate_normals.json from Open-Meteo
+│   ├── install_price_watcher_service.sh   # installs price_watcher.py as a macOS LaunchAgent
+│   └── uninstall_price_watcher_service.sh
 ├── docker/
 │   ├── Dockerfile
 │   └── entrypoint.sh
