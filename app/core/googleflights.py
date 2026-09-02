@@ -31,7 +31,14 @@ async def warm_up_cookies(context: BrowserContext):
 
 async def search_flight_google(page: Page, origin, destination, date_out):
     try:
-        url = f"https://www.google.com/travel/flights?hl=pl&q=flights+from+{origin}+to+{destination}+on+{date_out}+oneway"
+        # curr=PLN is explicit on purpose, not left to Google's own IP-based
+        # inference: this worked from every machine tested locally (their
+        # IP happens to geolocate somewhere PLN-default), then failed 6/6
+        # on GitHub Actions' runners with every price-selector wait timing
+        # out — Google was almost certainly serving USD there instead, so
+        # the "złotych"/"złote" (PLN) selector never matched anything.
+        # hl=pl controls language/button text only, not currency.
+        url = f"https://www.google.com/travel/flights?hl=pl&curr=PLN&q=flights+from+{origin}+to+{destination}+on+{date_out}+oneway"
         print(f"🌐 Otwieram: {url}")
         await page.goto(url, timeout=15000)
 
@@ -119,7 +126,14 @@ async def search_flight_google_for_airline(page: Page, origin, destination, date
     Google actually rendered (this doesn't force-load more).
     """
     try:
-        url = f"https://www.google.com/travel/flights?hl=pl&q=flights+from+{origin}+to+{destination}+on+{date_out}+oneway"
+        # curr=PLN is explicit on purpose, not left to Google's own IP-based
+        # inference: this worked from every machine tested locally (their
+        # IP happens to geolocate somewhere PLN-default), then failed 6/6
+        # on GitHub Actions' runners with every price-selector wait timing
+        # out — Google was almost certainly serving USD there instead, so
+        # the "złotych"/"złote" (PLN) selector never matched anything.
+        # hl=pl controls language/button text only, not currency.
+        url = f"https://www.google.com/travel/flights?hl=pl&curr=PLN&q=flights+from+{origin}+to+{destination}+on+{date_out}+oneway"
         print(f"🌐 Otwieram: {url}")
         await page.goto(url, timeout=15000)
 
