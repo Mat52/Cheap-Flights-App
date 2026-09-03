@@ -54,6 +54,7 @@ from playwright.async_api import async_playwright
 
 import database
 from core.googleflights import search_flight_google, search_flight_google_for_airline, warm_up_cookies
+from core.ryanair import get_ryanair_price
 from core.telegram import wyslij_telegram
 
 load_dotenv()
@@ -197,22 +198,38 @@ async def check_once(watchlist, price_store):
             await warm_up_cookies(context)
 
             for entry in watchlist:
-                page = await context.new_page()
-                try:
-                    if entry.get("airline"):
-                        # Specific-airline watch, e.g. a budget carrier's
-                        # own direct flight — not just whatever's cheapest
-                        # overall (which can be a connection on a different
-                        # airline entirely; see search_flight_google_for_airline's
-                        # docstring for a real example this was built for).
-                        result = await search_flight_google_for_airline(
-                            page, entry["origin"], entry["destination"], entry["date"],
-                            entry["airline"], direct_only=entry.get("direct_only", True),
-                        )
-                    else:
-                        result = await search_flight_google(page, entry["origin"], entry["destination"], entry["date"])
-                finally:
-                    await page.close()
+                # A Ryanair-pinned, direct-only entry skips the browser
+                # entirely — Ryanair's own fare-finder API (see core/ryanair.py)
+                # returns their exact price for one JSON GET, with none of the
+                # Google Flights scraper's DOM brittleness or result-caching
+                # volatility. Only covers point-to-point fares, so an entry
+                # that explicitly wants connections (direct_only: false)
+                # still goes through the scraper below.
+                use_ryanair_api = (
+                    entry.get("airline", "").strip().lower() == "ryanair"
+                    and entry.get("direct_only", True)
+                )
+                if use_ryanair_api:
+                    result = await asyncio.to_thread(
+                        get_ryanair_price, entry["origin"], entry["destination"], entry["date"]
+                    )
+                else:
+                    page = await context.new_page()
+                    try:
+                        if entry.get("airline"):
+                            # Specific-airline watch, e.g. a budget carrier's
+                            # own direct flight — not just whatever's cheapest
+                            # overall (which can be a connection on a different
+                            # airline entirely; see search_flight_google_for_airline's
+                            # docstring for a real example this was built for).
+                            result = await search_flight_google_for_airline(
+                                page, entry["origin"], entry["destination"], entry["date"],
+                                entry["airline"], direct_only=entry.get("direct_only", True),
+                            )
+                        else:
+                            result = await search_flight_google(page, entry["origin"], entry["destination"], entry["date"])
+                    finally:
+                        await page.close()
 
                 if not result:
                     _log(f"⚠️ Nie udało się sprawdzić: {describe(entry)} ({entry['date']})")
