@@ -1,0 +1,58 @@
+[
+  {
+    "origin": "KRK",
+    "destination": "CFU",
+    "date": "2026-09-18",
+    "label": "Kraków -> Korfu (Ryanair)",
+    "airline": "Ryanair"
+  },
+  {
+    "origin": "CFU",
+    "destination": "KRK",
+    "date": "2026-09-21",
+    "label": "Korfu -> Kraków (Ryanair)",
+    "airline": "Ryanair"
+  },
+  {
+    "origin": "KRK",
+    "destination": "AGP",
+    "date": "2026-09-17",
+    "label": "Kraków -> Malaga (Ryanair)",
+    "airline": "Ryanair"
+  },
+  {
+    "origin": "AGP",
+    "destination": "KRK",
+    "date": "2026-09-20",
+    "label": "Malaga -> Kraków (Ryanair)",
+    "airline": "Ryanair"
+  },
+  {
+    "origin": "KRK",
+    "destination": "RHO",
+    "date": "2026-09-17",
+    "label": "Kraków -> Rodos (Ryanair)",
+    "airline": "Ryanair"
+  },
+  {
+    "origin": "RHO",
+    "destination": "KRK",
+    "date": "2026-09-20",
+    "label": "Rodos -> Kraków (Ryanair)",
+    "airline": "Ryanair"
+  },
+  {
+    "origin": "KRK",
+    "destination": "MAD",
+    "date": "2026-09-18",
+    "label": "Kraków -> Madryt (Ryanair)",
+    "airline": "Ryanair"
+  },
+  {
+    "origin": "MAD",
+    "destination": "KRK",
+    "date": "2026-09-21",
+    "label": "Madryt -> Kraków (Ryanair)",
+    "airline": "Ryanair"
+  }
+]
