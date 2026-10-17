@@ -33,6 +33,11 @@ cp .env.example .env
 - `SCRAPE_CONCURRENCY` — how many Google Flights pages to scrape at once per search (default `5`). Higher is faster but pushes harder against Google's own rate limiting/bot detection.
 - `CACHE_MAX_AGE_MINUTES` — how fresh a previously-scraped leg has to be to reuse it instead of scraping again (default `30`); `0` always scrapes live. Per-search override via the "Użyj cache" checkbox on the page.
 
+Docker Compose only (see "Run with Docker"):
+- `DB_PUBLISH_PORT` — host port the Postgres container is published on (default `5432`, bound to `127.0.0.1`).
+- `DOCKER_OLLAMA_HOST` — how the web container reaches Ollama on the host (default `http://host.docker.internal:11434`).
+- `PGADMIN_EMAIL` / `PGADMIN_PASSWORD` — pgAdmin login, only used with `--profile tools`.
+
 **Never commit `.env`** — it's gitignored.
 
 ---
@@ -77,12 +82,35 @@ Open **http://localhost:5000**, fill in the form and search. Postgres persistenc
 ## 🐳 Run with Docker
 
 ```bash
-docker-compose up --build
+cp .env.example .env               # set at least DB_USER and DB_PASSWORD
+docker compose up --build -d
+docker compose ps                  # both services should report "healthy"
 ```
-Docker Compose reads `.env` from the repo root automatically, so make sure it exists first. This brings up:
-- **web** — the Flask app + scraper at `http://localhost:5000`
-- **db** — Postgres, storing scraped flights
-- **pgadmin** — at `http://localhost:8080` (login: `admin@admin.com` / `admin`) to browse the `flights` table
+
+| Service | URL | Notes |
+|---|---|---|
+| `web` | http://localhost:5000 | Flask app + scraper, served by gunicorn |
+| `db` | `127.0.0.1:5432` | Postgres 15; `web` starts only once it passes its healthcheck |
+| `pgadmin` | http://localhost:8080 | Optional — `docker compose --profile tools up -d` |
+
+### Image
+`docker/Dockerfile` is a multi-stage build: dependencies are installed into a virtualenv in a builder stage and only that venv is copied into the runtime image. The runtime image installs Chromium only (the app runs headless), runs as an unprivileged `app` user, and serves the app with gunicorn — a single worker with multiple threads, because the search job registry lives in process memory. `.dockerignore` keeps `.env`, `venv/`, `.git` and personal price-watcher data out of the build context.
+
+### Health endpoints
+| Endpoint | Purpose | Response |
+|---|---|---|
+| `/healthz` | Liveness — the process is up and serving | Always `200` while running; deliberately ignores the database |
+| `/readyz` | Readiness — dependencies are reachable | `200` when Postgres answers, `503` otherwise |
+
+The image's `HEALTHCHECK` polls `/healthz`; the same pair maps directly onto Kubernetes liveness/readiness probes.
+
+### Configuration and secrets
+All credentials come from `.env`; nothing is hardcoded in `docker-compose.yml`, and compose refuses to start with a clear error if `DB_USER` or `DB_PASSWORD` is missing. Inside compose the app always reaches the database as `db`, regardless of `DB_HOST` in `.env`. AI search reaches Ollama on the host via `host.docker.internal` (override with `DOCKER_OLLAMA_HOST`).
+
+### Notes
+- **Code changes require a rebuild** (`docker compose up --build -d`) — the source is baked into the image, not bind-mounted.
+- **Port conflicts on macOS:** port 5000 is often held by AirPlay Receiver and 5432 by a local Postgres. Set `PORT=5050` and/or `DB_PUBLISH_PORT=5433` in `.env`.
+- **Changing DB credentials** after the volume was first created has no effect — Postgres keeps the original ones. Reset with `docker compose down -v` (this deletes all saved flights).
 
 ---
 
@@ -180,13 +208,26 @@ Cheap-Flights-App/
 │   ├── install_price_watcher_service.sh   # installs price_watcher.py as a macOS LaunchAgent
 │   └── uninstall_price_watcher_service.sh
 ├── docker/
-│   ├── Dockerfile
-│   └── entrypoint.sh
-├── docker-compose.yml          # web + Postgres + pgAdmin
+│   └── Dockerfile              # multi-stage, non-root, Chromium only
+├── docker-compose.yml          # web + Postgres (+ pgAdmin via --profile tools)
+├── .dockerignore
 ├── requirements.txt
 ├── .env.example
 └── .gitignore
 ```
+
+---
+
+## 🗺️ Roadmap (DevOps)
+
+This project doubles as a hands-on DevOps learning environment. Planned stages:
+
+1. **Containerization** ✅ — multi-stage non-root image, health endpoints, secrets from `.env`, compose healthchecks
+2. **CI/CD** — GitHub Actions: lint/test, image build, push to a registry, vulnerability scanning (Trivy)
+3. **Kubernetes (local)** — kind/k3d: Deployment, Service, Ingress, ConfigMap/Secret, Postgres StatefulSet, price watcher as a CronJob; Helm chart
+4. **Terraform** — cloud networking, container registry, managed Postgres, Kubernetes cluster; remote state, separate environments
+5. **Cloud deployment** — AKS or EKS, GitOps with Argo CD
+6. **Observability** — Prometheus, Grafana, centralized logs, alerting
 
 ---
 
