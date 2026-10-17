@@ -1,0 +1,24 @@
+# Helm values for the Traefik ingress controller on kind (`make k8s-up`).
+# kind has no cloud load balancer, so Traefik is exposed as a NodePort that
+# kind-config.yaml maps to the host.
+service:
+  type: NodePort
+
+ports:
+  web:
+    nodePort: 30080
+  websecure:
+    expose:
+      default: false
+
+ingressClass:
+  enabled: true
+  isDefaultClass: true
+
+# Single local node — keep the footprint small.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

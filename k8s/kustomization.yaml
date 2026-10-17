@@ -1,0 +1,50 @@
+# Entry point: `kubectl apply -k k8s/` (or `make k8s-deploy`).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cheap-flights
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - web.yaml
+  - price-watcher.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: cheap-flights
+    includeSelectors: false
+
+# The same image CI pushes to GHCR. "latest" keeps the local loop simple
+# (`make k8s-restart` pulls whatever main last built); pinning an immutable
+# sha-<commit> tag here — updated automatically — is what GitOps adds later.
+images:
+  - name: cheap-flights-web
+    newName: ghcr.io/mat52/cheap-flights-web
+    newTag: latest
+
+# Generated ConfigMaps/Secrets get a content-hash suffix, so changing a value
+# changes the name and rolls the pods that reference it automatically.
+configMapGenerator:
+  - name: app-config
+    literals:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=flights
+      # host.docker.internal: Ollama running on the Mac, outside the cluster
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - OLLAMA_MODEL=llama3.1:8b
+      - SCRAPE_CONCURRENCY=3
+      - CACHE_MAX_AGE_MINUTES=30
+  # Personal watchlist — copied from app/watchlist.json by `make k8s-config`
+  # (gitignored, like the original).
+  - name: watchlist
+    files:
+      - watchlist.json
+
+secretGenerator:
+  # Built from selected keys of the repo's .env by `make k8s-config`
+  # (gitignored — never commit it).
+  - name: app-secrets
+    envs:
+      - secrets.env
