@@ -1,0 +1,86 @@
+# price_watcher.py --once on a schedule, with its price history in the
+# cluster's Postgres (PRICE_STORE=postgres) instead of a JSON file in git.
+#
+# Created SUSPENDED: the GitHub Actions workflow (price_watcher.yml) already
+# runs the same checks, and both active at once would double every Telegram
+# alert. Enable with `make k8s-watcher-on` (and disable the workflow), or run
+# a single check now with `make k8s-watcher-run`.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: price-watcher
+  labels:
+    app.kubernetes.io/name: price-watcher
+spec:
+  schedule: "7,22,37,52 * * * *"
+  suspend: true
+  # Never start a run while the previous one is still going.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      # Kill a hung run (e.g. a stuck browser) after 10 minutes.
+      activeDeadlineSeconds: 600
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: price-watcher
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: price-watcher
+              image: cheap-flights-web  # same image as web; tag set in kustomization.yaml
+              imagePullPolicy: Always  # make k8s-dev switches this to Never
+              command: ["python", "price_watcher.py", "--once"]
+              envFrom:
+                - configMapRef:
+                    name: app-config
+              env:
+                - name: PRICE_STORE
+                  value: postgres
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef: {name: app-secrets, key: DB_USER}
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef: {name: app-secrets, key: DB_PASSWORD}
+                - name: TELEGRAM_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef: {name: app-secrets, key: TELEGRAM_BOT_TOKEN, optional: true}
+                - name: TELEGRAM_CHAT_ID
+                  valueFrom:
+                    secretKeyRef: {name: app-secrets, key: TELEGRAM_CHAT_ID, optional: true}
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  memory: 1536Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: watchlist
+                  mountPath: /app/watchlist.json
+                  subPath: watchlist.json
+                  readOnly: true
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: watchlist
+              configMap:
+                name: watchlist
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 256Mi

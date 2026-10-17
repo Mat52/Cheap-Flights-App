@@ -76,6 +76,10 @@ WATCHER_JITTER_SECONDS = int(os.getenv("WATCHER_JITTER_SECONDS", "20"))
 # Pause between individual watched flights within one check cycle — keeps
 # a watchlist of a few flights from all hitting Google in the same instant.
 WATCHER_PER_FLIGHT_DELAY_SECONDS = 2
+# Price history backend for --once: "json" (price_history.json, for GitHub
+# Actions runners with no database) or "postgres" (wherever the database is
+# reachable — e.g. the Kubernetes CronJob, running next to Postgres).
+PRICE_STORE = os.getenv("PRICE_STORE", "json")
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 WATCHLIST_PATH = os.path.join(APP_DIR, "watchlist.json")
@@ -259,8 +263,9 @@ async def check_once(watchlist, price_store):
 
 
 def run_once():
-    """Single check-and-exit, for an external scheduler (GitHub Actions).
-    Uses JsonFilePriceStore, not Postgres — see the module docstring."""
+    """Single check-and-exit, for an external scheduler (GitHub Actions or a
+    Kubernetes CronJob). Uses JsonFilePriceStore unless PRICE_STORE=postgres
+    — see the module docstring."""
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         _log("⚠️ TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID nie są skonfigurowane — zmiany cen będą tylko logowane, nie wysyłane na telefon.")
 
@@ -269,8 +274,12 @@ def run_once():
         _log("⚠️ Watchlist jest pusta — nic do sprawdzenia.")
         sys.exit(1)
 
-    _log(f"🔎 Jednorazowe sprawdzenie {len(watchlist)} lotów (--once): " + ", ".join(describe(e) for e in watchlist))
-    price_store = JsonFilePriceStore(PRICE_HISTORY_PATH)
+    _log(f"🔎 Jednorazowe sprawdzenie {len(watchlist)} lotów (--once, historia: {PRICE_STORE}): " + ", ".join(describe(e) for e in watchlist))
+    if PRICE_STORE == "postgres":
+        database.init_db()
+        price_store = PostgresPriceStore()
+    else:
+        price_store = JsonFilePriceStore(PRICE_HISTORY_PATH)
     asyncio.run(check_once(watchlist, price_store))
     _log("✅ Gotowe.")
 
