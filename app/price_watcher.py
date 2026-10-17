@@ -53,7 +53,11 @@ from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
 import database
-from core.googleflights import search_flight_google, search_flight_google_for_airline, warm_up_cookies
+from core.googleflights import (
+    search_flight_google,
+    search_flight_google_for_airline,
+    warm_up_cookies,
+)
 from core.ryanair import get_ryanair_price
 from core.telegram import wyslij_telegram
 

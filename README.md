@@ -1,5 +1,7 @@
 # ✈️ Cheap Flights App
 
+[![CI](https://github.com/Mat52/Cheap-Flights-App/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Mat52/Cheap-Flights-App/actions/workflows/ci.yml)
+
 A small web app for hunting cheap round-trip flights on **Google Flights**. Type in your airports, date ranges and price threshold on the page, hit search, and it scrapes, pairs up outbound/return legs into round-trip offers, saves what it finds to Postgres, and (optionally) pings you on Telegram for anything under your price threshold.
 
 ---
@@ -176,11 +178,37 @@ Then either wait for the schedule, or trigger a run immediately from the repo's 
 
 ---
 
+## 🔁 CI/CD
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main` (the price watcher's `[skip ci]` history commits are excluded):
+
+| Job | What it does |
+|---|---|
+| `lint` | `ruff check` — pyflakes, pycodestyle, bugbear, import order, pyupgrade (config in `pyproject.toml`) |
+| `test` | `pytest` — no browser, Postgres or Ollama required; external calls are stubbed |
+| `image` | Builds the Docker image (layer cache in GitHub Actions), scans it with Trivy, uploads the report to the repository's **Security → Code scanning** tab, and — on `main` only — pushes it to GitHub Container Registry |
+
+**Security gate:** the pipeline fails if the image contains a HIGH or CRITICAL vulnerability with a fix available. Unfixed vulnerabilities are reported but don't block.
+
+**Image tags** (`ghcr.io/mat52/cheap-flights-web`): `sha-<commit>` for every build, `latest` for `main`. Pull requests build and scan the image but never push it.
+
+**Supply chain:** all third-party actions are pinned to full commit SHAs (with the version in a trailing comment), so a moved or compromised tag can't change what runs.
+
+### Running the checks locally
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+ruff check .
+pytest
+```
+
+---
+
 ## 📂 Project Structure
 ```
 Cheap-Flights-App/
 │
 ├── .github/workflows/
+│   ├── ci.yml                  # lint, test, build + scan image, push to GHCR (see "CI/CD")
 │   └── price_watcher.yml       # runs price_watcher.py --once on a schedule (see "Price Watcher")
 ├── app/
 │   ├── webapp.py               # Flask app: search form + results
@@ -207,11 +235,14 @@ Cheap-Flights-App/
 │   ├── fetch_climate_normals.py # one-time/occasional: (re)build climate_normals.json from Open-Meteo
 │   ├── install_price_watcher_service.sh   # installs price_watcher.py as a macOS LaunchAgent
 │   └── uninstall_price_watcher_service.sh
+├── tests/                      # pytest suite (pure logic; DB and Ollama stubbed)
 ├── docker/
 │   └── Dockerfile              # multi-stage, non-root, Chromium only
 ├── docker-compose.yml          # web + Postgres (+ pgAdmin via --profile tools)
 ├── .dockerignore
 ├── requirements.txt
+├── requirements-dev.txt        # pytest, ruff
+├── pyproject.toml              # ruff and pytest configuration
 ├── .env.example
 └── .gitignore
 ```
@@ -223,7 +254,7 @@ Cheap-Flights-App/
 This project doubles as a hands-on DevOps learning environment. Planned stages:
 
 1. **Containerization** ✅ — multi-stage non-root image, health endpoints, secrets from `.env`, compose healthchecks
-2. **CI/CD** — GitHub Actions: lint/test, image build, push to a registry, vulnerability scanning (Trivy)
+2. **CI/CD** ✅ — GitHub Actions: lint/test, image build, Trivy vulnerability gate, push to GHCR
 3. **Kubernetes (local)** — kind/k3d: Deployment, Service, Ingress, ConfigMap/Secret, Postgres StatefulSet, price watcher as a CronJob; Helm chart
 4. **Terraform** — cloud networking, container registry, managed Postgres, Kubernetes cluster; remote state, separate environments
 5. **Cloud deployment** — AKS or EKS, GitOps with Argo CD

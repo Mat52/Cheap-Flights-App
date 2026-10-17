@@ -1,0 +1,18 @@
+[tool.ruff]
+target-version = "py312"
+src = ["app"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, bugbear, pyupgrade
+select = ["E", "W", "F", "I", "B", "UP"]
+ignore = [
+    "E501",  # long lines are used deliberately for readable comments/strings
+    "B905",  # zip() without strict= — the zipped sequences are built to match
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "database", "webapp", "price_watcher"]
+
+[tool.pytest.ini_options]
+pythonpath = ["app"]
+testpaths = ["tests"]
