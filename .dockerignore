@@ -1,0 +1,16 @@
+# Kept out of the build context: smaller, faster builds and no secrets or
+# personal data baked into the image.
+.git
+.github
+.env
+venv/
+**/__pycache__/
+**/*.pyc
+.DS_Store
+docs/
+scripts/
+README.md
+
+# Price watcher's personal config/state — not used by the web image
+app/watchlist.json
+app/price_history.json

@@ -433,6 +433,28 @@ def saved():
     )
 
 
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    """Liveness: the process is up and serving requests. Deliberately checks
+    nothing external — a DB outage shouldn't get the container restarted,
+    since search still works without it (persisting is best-effort)."""
+    return jsonify(status="ok")
+
+
+@app.route("/readyz", methods=["GET"])
+def readyz():
+    """Readiness: can this instance reach its dependencies (Postgres)?"""
+    try:
+        conn = database.get_connection()
+        try:
+            conn.cursor().execute("SELECT 1")
+        finally:
+            conn.close()
+    except Exception as e:
+        return jsonify(status="unavailable", db=str(e)), 503
+    return jsonify(status="ok", db="ok")
+
+
 if __name__ == "__main__":
     # threaded=True: the search itself now runs in a background thread
     # (run_search_job), started by index()'s POST handler and polled by
