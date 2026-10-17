@@ -1,5 +1,6 @@
-from playwright.async_api import BrowserContext, Page
 import re
+
+from playwright.async_api import BrowserContext, Page
 
 
 async def warm_up_cookies(context: BrowserContext):

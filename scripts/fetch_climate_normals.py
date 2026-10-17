@@ -16,8 +16,8 @@ import json
 import os
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 START_DATE = "2020-01-01"

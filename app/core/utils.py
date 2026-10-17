@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 
+
 def generate_dates(start: str, end: str):
     start_date = datetime.strptime(start, "%Y-%m-%d")
     end_date = datetime.strptime(end, "%Y-%m-%d")
