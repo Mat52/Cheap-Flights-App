@@ -89,6 +89,19 @@ docker compose up --build -d
 docker compose ps                  # both services should report "healthy"
 ```
 
+The `Makefile` wraps the everyday commands — run `make` for the full list:
+
+| Command | What it does |
+|---|---|
+| `make up` / `make up-ghcr` | Start web + db, built from local code / pulled from the CI-built GHCR image |
+| `make down` | Stop and remove containers (database data is kept) |
+| `make ps` · `make logs` · `make stats` | Status and health · follow web logs · CPU/memory snapshot |
+| `make health` | Query `/healthz` and `/readyz` |
+| `make shell` · `make db` | Shell in the web container · `psql` in the db container |
+| `make tools` | Also start pgAdmin |
+| `make check` | Lint + tests, same as CI |
+| `make clean` | Stop everything and delete the database volume (asks for confirmation) |
+
 | Service | URL | Notes |
 |---|---|---|
 | `web` | http://localhost:5000 | Flask app + scraper, served by gunicorn |
@@ -198,7 +211,7 @@ Then either wait for the schedule, or trigger a run immediately from the repo's 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
 ruff check .
-pytest
+pytest                             # or simply: make check
 ```
 
 ---
@@ -239,6 +252,7 @@ Cheap-Flights-App/
 ├── docker/
 │   └── Dockerfile              # multi-stage, non-root, Chromium only
 ├── docker-compose.yml          # web + Postgres (+ pgAdmin via --profile tools)
+├── Makefile                    # shortcuts: make up / logs / db / check … (`make` lists all)
 ├── .dockerignore
 ├── requirements.txt
 ├── requirements-dev.txt        # pytest, ruff
